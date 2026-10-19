@@ -1918,7 +1918,30 @@ function renderShooters(){
     var n = Object.keys(S.scores).filter(function(k){ return S.scores[k].shooter === sh.id; }).length;
     h += '<button type="button" class="shrow" data-edsh="' + sh.id + '"><span class="nm"><b>' + (sh.no ? "#" + sh.no + " " : "") + esc(shName(sh)) + '</b><span class="small muted">' + esc(clsLabel(sh)) + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.member ? " · " + esc(sh.member) : "") + '</span></span><span class="small">' + n + ' stage' + (n === 1 ? "" : "s") + '</span></button>';
   });
+  if(S.role !== "ro" && S.shooters.length) h += '<div style="margin-top:28px;border-top:1px solid #8884;padding-top:14px"><button type="button" class="danger wide" data-act="clearsh">Clear shooters…</button><p class="small muted">Deletes every shooter in this match (and their scores).</p></div>';
   view().innerHTML = h;
+}
+/* Clear all shooters or all stages of the current match, with their scores (no orphans). */
+function clearAll(kind){
+  var sh = kind === "shooters", list = sh ? S.shooters : S.stages, N = list.length; if(!N) return Promise.resolve(false);
+  var ids = {}; list.forEach(function(x){ ids[x.id] = 1; });
+  var keys = Object.keys(S.scores).filter(function(k){ return ids[sh ? S.scores[k].shooter : S.scores[k].stage]; }), n = keys.length;
+  var what = N + " " + (sh ? (N === 1 ? "shooter" : "shooters") : (N === 1 ? "stage" : "stages"));
+  var msg = "Delete all " + what + " in this match?" + (n ? " Their " + n + " saved score" + (n === 1 ? "" : "s") + " will be deleted too." : " No scores are recorded for them.") + " This cannot be undone – export a backup first if unsure.";
+  return ask(msg, { ok: n ? "Continue…" : "Delete " + what, okClass: "danger" }).then(function(ok){
+    if(!ok) return false;
+    if(!n) return true;
+    return ask("This permanently deletes " + what + " AND " + n + " score" + (n === 1 ? "" : "s") + ". Type CLEAR to confirm.", { ok: "Delete " + what + " and " + n + " score" + (n === 1 ? "" : "s"), okClass: "danger", input: true, required: true, placeholder: "Type CLEAR" }).then(function(v){ return v != null && v.trim().toUpperCase() === "CLEAR" ? true : (v != null && toast("Not cleared – CLEAR was not typed"), false); });
+  }).then(function(go){
+    if(!go) return false;
+    keys.forEach(function(k){ delete S.scores[k]; });
+    S.conflicts = (S.conflicts || []).filter(function(c){ var x = S.scores[c.key] || c.local || c.incoming || {}; var p = String(c.key || "").split("|"); return !(sh ? (ids[x.shooter] || ids[p[1]]) : (ids[x.stage] || ids[p[0]])); });
+    if(U.draft && typeof clearDraft === "function"){ clearDraft(); U.draft = null; if(U.screen === "entry" || U.screen === "confirm") U.screen = "stages"; }
+    if(sh) S.shooters = []; else { S.stages = []; U.stage = null; U.screen = "stages"; }
+    S.audit.push({ at: nowISO(), device: S.device.name, key: kind, note: "Cleared all " + what + (n ? " with " + n + " score(s)" : "") });
+    saveState(); render(); toast("Cleared " + what + (n ? " and " + n + " score" + (n === 1 ? "" : "s") : ""));
+    return true;
+  });
 }
 function editShooter(id){
   var sh = id ? shooterById(id) : { first: "", last: "", member: "", cls: "", clsText: "", squad: "", cat: "", email: "", no: null };
@@ -1956,7 +1979,7 @@ function renderMatch(){
   h += '<div class="card"><h3>This phone</h3><label>Phone name (shown on packs and scores)</label><input id="devName" value="' + esc(S.device.name) + '" placeholder="e.g. Main, RO Stage 2"><div class="small muted" style="margin-top:6px">Scoring model: <b>' + esc(matchModel() || "–") + '</b>' + (isMultiGun() ? " · multi-gun (open rankings)" : "") + '<br>Role: <b>' + (ro ? "RO phone" : "Main phone") + '</b>' + (ro && S.ro ? " – stages " + S.stages.filter(function(s){ return S.ro.assigned.indexOf(s.id) >= 0; }).map(function(s){ return s.no; }).join(", ") + (S.ro.main ? ", from " + esc(S.ro.main) : "") : "") + '</div>' + (ro ? '<button type="button" class="wide" style="margin-top:8px" data-act="makemain">Make this the main phone…</button>' : "") + '</div>';
   h += '<div class="card"><h3>Import</h3><button type="button" class="primary wide" data-act="import">Import a file…</button><p class="small muted">Stage Designer match or stage file (any version), shooters CSV, a stage pack, a scores pack or a backup – the type is detected.</p><button type="button" class="wide" data-act="scan">Scan QR codes…</button></div>';
   if(!ro){
-    h += '<div class="card"><h3>Stages (' + S.stages.length + ')</h3>' + (S.stages.length ? '<ul class="list-plain">' + S.stages.map(function(st){ return '<li class="row"><span class="grow"><b>Stage ' + st.no + '</b> – ' + esc(st.title) + '<br><span class="small muted">' + st.division + ' · ' + MODELS[st.scoring].n + ' · ' + stageTotal(st).rounds + ' rds · ' + scoredCount(st) + ' scored</span></span><button type="button" class="slim danger" data-delst="' + st.id + '">Remove</button></li>'; }).join("") + '</ul>' : '<p class="muted">None yet – import the Stage Designer match file.</p>') + '</div>';
+    h += '<div class="card"><h3>Stages (' + S.stages.length + ')</h3>' + (S.stages.length ? '<ul class="list-plain">' + S.stages.map(function(st){ return '<li class="row"><span class="grow"><b>Stage ' + st.no + '</b> – ' + esc(st.title) + '<br><span class="small muted">' + st.division + ' · ' + MODELS[st.scoring].n + ' · ' + stageTotal(st).rounds + ' rds · ' + scoredCount(st) + ' scored</span></span><button type="button" class="slim danger" data-delst="' + st.id + '">Remove</button></li>'; }).join("") + '</ul>' + (S.role !== "ro" ? '<div style="margin-top:18px;border-top:1px solid #8884;padding-top:12px"><button type="button" class="danger wide" data-act="clearst">Clear stages…</button></div>' : "") : '<p class="muted">None yet – import the Stage Designer match file.</p>') + '</div>';
     h += '<div class="card"><h3>RO phones (up to 3)</h3><p class="small muted">No live sync: give each RO phone a stage pack; it scores offline and sends a scores pack back, which this phone merges.</p><button type="button" class="wide primary" data-act="stagepack"' + (S.stages.length ? "" : " disabled") + '>Make a stage pack for an RO phone…</button>' +
       (S.merged.length ? '<div class="small" style="margin-top:8px"><b>Merged:</b><ul class="list-plain">' + S.merged.slice(-6).reverse().map(function(m){ return "<li>" + esc(m.from) + " – " + fmtWhen(m.at) + ": " + m.added + " new, " + m.same + " same, " + m.conflicts + " conflict(s)</li>"; }).join("") + '</ul></div>' : "") +
       (S.conflicts.length ? '<button type="button" class="wide danger" style="margin-top:8px" data-act="merge">Resolve ' + S.conflicts.length + ' conflict(s)</button>' : "") + '</div>';
@@ -2123,6 +2146,8 @@ function onClick(e){
   switch(d.act){
     case "stages": U.screen = "stages"; U.stage = null; render(); break;
     case "import": $("fileAny").click(); break;
+    case "clearsh": clearAll("shooters"); break;
+    case "clearst": clearAll("stages"); break;
     case "back": ask(U.editing ? "Leave without saving the changes?" : "Leave this shooter? The entry so far is discarded.", { ok: "Leave", okClass: "danger" }).then(function(ok){ if(ok){ clearDraft(); U.screen = "shooters"; U.draft = null; render(); } }); break;
     case "review": goReview(); break;
     case "toentry": U.screen = "entry"; saveDraft(); render(); break;
@@ -2160,7 +2185,7 @@ function boot(){
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later" }).then(function(v){ if(v && v.trim()){ S.device.name = v.trim(); saveState(); render(); } }); }, 300);
   if("serviceWorker" in navigator && location.protocol !== "file:") setupUpdates();
 }
-window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, setS: function(x){ S = x; } };
+window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, setS: function(x){ S = x; } };
 document.addEventListener("DOMContentLoaded", boot);
 
 /* updates: a new version (new sw.js build hash) installs in the background; the user is told and reloads when ready */
