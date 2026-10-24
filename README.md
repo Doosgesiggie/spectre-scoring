@@ -43,6 +43,8 @@ data model, migration, hit requirements and SVG renderer (the designer itself is
 - GitHub Pages caches files for ~10 minutes, so a phone may need that long to see a new version.
 
 ## Live sync (optional, Firebase)
+
+**Published results:** the main phone's Live sync card has *Publish results* / *Unpublish*. Nothing is shared until pressed; it writes a read-only snapshot (overall, class and stage rankings, no signatures or conflict data) to `rooms/{CODE}/results/current`, with a warning first if merge conflicts are unresolved. RO phones and phones that join with *View results only (no scoring)* see a live read-only leaderboard stamped *Published HH:MM*. Unpublish overwrites the snapshot with a hidden flag (deletes are denied).
 - Off by default; the app is unchanged without it. Match tab → **Live sync**: the main phone creates a room (6-character match code + QR),
   RO phones join with the code/QR and tick their stages. Firebase SDK 10.14.1 (modular ESM from gstatic) loads only when sync is on and is
   cached by sw.js for offline starts. Config: `src/firebase-config.js` (project spectre-scoring-5ddda).

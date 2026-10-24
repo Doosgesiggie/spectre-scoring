@@ -167,6 +167,9 @@ details > summary{cursor:pointer;font-weight:700;min-height:44px;display:flex;al
 .syncchip{min-height:36px;padding:3px 8px;margin-right:6px;font-size:.75em;background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,.6);white-space:nowrap}
 .syncchip[data-st=connected]{border-color:#5fd38d}.syncchip[data-st=offline],.syncchip[data-st=connecting]{border-color:#f0c040}.syncchip[data-st=error]{border-color:#ff6b6b}
 .syncqr svg{width:200px;height:200px;display:block;margin:8px auto;background:#fff}
+.restable{border-collapse:collapse;font-size:13px;width:100%}
+.restable th,.restable td{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left;white-space:nowrap}
+.resboard .msg{margin:6px 0}
 </style>
 </head>
 <body>
@@ -1691,6 +1694,26 @@ function resultsCSV(){
   });
   return csvRows(rows);
 }
+
+/* ---------------- published results snapshot (live sync "Publish results") ----------------
+   Plain strings only: no signatures, no conflict data, no device/edit info. Rendered read-only (escaped) on other phones. */
+function resultsSnapshot(){
+  var tables = [];
+  overallViews().forEach(function(v){
+    var mr = matchResults(v.open, v.fa), rows = [];
+    mr.groups.forEach(function(g){
+      g.rows.forEach(function(r){ rows.push([g.name, String(r.place), shName(r.sh), clsLabel(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat([totalText(mr.method, r), r.tieHz ? "tie – placed by HZ" : ""])); });
+      g.other.forEach(function(r){ rows.push([g.name, "", shName(r.sh), clsLabel(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat(["", String(r.why || "")])); });
+    });
+    tables.push({ t: v.label, s: viewTitle(v) + " · " + METHOD_TEXT[mr.method], h: ["Group", "#", "Shooter", "Class"].concat(mr.stages.map(function(s){ return "S" + s.no; })).concat(["Total", ""]), r: rows });
+  });
+  S.stages.forEach(function(st){
+    var sr = stageResults(st), rows = [];
+    sr.groups.forEach(function(g){ g.rows.concat(g.other).forEach(function(r){ rows.push([g.name, String(r.place || ""), shName(r.sh), clsLabel(r.sh), r.sc.time != null ? f2(r.sc.time) : "", scoreText(st, r.res), String(r.why || (r.dqLater ? "DQ later in the match" : ""))]); }); });
+    tables.push({ t: "Stage " + st.no, s: "Stage " + st.no + " – " + st.title + " · " + (sr.open ? "open ranking" : "by class"), h: ["Group", "#", "Shooter", "Class", "Time (s)", "Score", ""], r: rows });
+  });
+  return { match: { name: S.match.name, date: S.match.date, venue: S.match.venue }, tables: tables };
+}
 /* ===================== files, packs, merge, QR ===================== */
 function slugify(s){ return String(s || "match").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "match"; }
 /* share a file with the Web Share API where the phone supports files, else download it */
@@ -2305,8 +2328,8 @@ function importObject(obj, name, txt){
    RO phones receive stage/shooter updates through applyStagePack. QR/file packs keep working unchanged.
    Queue: SYNC.acked[key] = last rev the server confirmed; pending = own scores with a newer rev (kept across restarts).   */
 var SYNC_KEY = "spectreScoring.sync", SYNC_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", SYNC_SIG_MAX = 700000, SYNC_PACK_MAX = 900000;
-var SYNC = { on: false, code: "", host: false, acked: {}, sigAcked: {}, packHash: "" };
-var SYNCRT = { t: null, status: "off", err: "", unsub: [], busy: false, packTimer: null, seen: {} };
+var SYNC = { on: false, code: "", host: false, view: false, acked: {}, sigAcked: {}, packHash: "" };
+var SYNCRT = { t: null, status: "off", err: "", unsub: [], busy: false, packTimer: null, seen: {}, results: null, resTab: 0 };
 function syncLoad(){ try{ Object.assign(SYNC, JSON.parse(localStorage.getItem(SYNC_KEY) || "{}")); }catch(e){} }
 function syncSave(){ try{ localStorage.setItem(SYNC_KEY, JSON.stringify(SYNC)); }catch(e){} }
 function syncCfg(){ return window.SS_FIREBASE_TEST || window.SS_FIREBASE_CONFIG || {}; } /* SS_FIREBASE_TEST: emulator tests only */
@@ -2350,6 +2373,8 @@ function syncTransport(){
       getSig: function(code, id){ return F.getDoc(F.doc(db, "rooms", code, "sigs", id)).then(function(d){ return d.exists() ? d.data() : null; }); },
       watchRoom: function(code, cb, onErr){ return F.onSnapshot(F.doc(db, "rooms", code), { includeMetadataChanges: true }, function(d){ cb(d.exists() ? d.data() : null, d.metadata.fromCache); }, onErr); },
       watchScores: function(code, cb, onErr){ return F.onSnapshot(F.collection(db, "rooms", code, "scores"), function(q){ cb(q.docChanges().filter(function(c){ return c.type !== "removed"; }).map(function(c){ return c.doc.data(); })); }, onErr); },
+      putResults: function(code, data){ return F.setDoc(F.doc(db, "rooms", code, "results", "current"), data); },
+      watchResults: function(code, cb, onErr){ return F.onSnapshot(F.doc(db, "rooms", code, "results", "current"), function(d){ cb(d.exists() ? d.data() : null); }, onErr); },
       online: function(on){ return on ? F.enableNetwork(db) : F.disableNetwork(db); }
     };
     SYNCRT.t = t; return t;
@@ -2364,7 +2389,8 @@ function syncStart(){
     return t.signIn().then(function(){
       syncStop(true);
       SYNCRT.unsub.push(t.watchRoom(SYNC.code, syncOnRoom, syncOnErr));
-      if(S.role !== "ro") SYNCRT.unsub.push(t.watchScores(SYNC.code, syncOnScores, syncOnErr));
+      if(!SYNC.host && t.watchResults) SYNCRT.unsub.push(t.watchResults(SYNC.code, syncOnResults, function(){ SYNCRT.results = null; }) /* not fatal: e.g. rules without a results path */);
+      if(S.role !== "ro" && !SYNC.view) SYNCRT.unsub.push(t.watchScores(SYNC.code, syncOnScores, syncOnErr));
       SYNCRT.busy = false; syncFlush(); if(SYNC.host) syncPushPack(true);
     });
   }).catch(function(e){ SYNCRT.busy = false; syncSetStatus(navigator.onLine === false ? "offline" : "error", navigator.onLine === false ? "No signal – will connect when back online." : "Live sync could not start: " + (e && e.message || e)); });
@@ -2373,13 +2399,13 @@ function syncStop(keepStatus){ SYNCRT.unsub.forEach(function(u){ try{ u(); }catc
 function syncOnErr(e){ syncSetStatus("error", "Live sync: " + (e && e.message || e)); }
 function syncOnRoom(room, fromCache){
   syncSetStatus(fromCache || navigator.onLine === false ? "offline" : "connected");
-  if(!room || SYNC.host || S.role !== "ro") return;
+  if(!room || SYNC.host || SYNC.view || S.role !== "ro") return;
   if(room.packHash && room.packHash === SYNC.packHash) return;
   try{ var p = JSON.parse(room.pack); if(p.matchId !== S.matchId) return; var assigned = S.ro && S.ro.assigned; applyStagePack(p, true); if(assigned) S.ro.assigned = assigned; S.ro.live = SYNC.code; saveState(); SYNC.packHash = room.packHash; syncSave(); render(); }catch(e){ syncOnErr(e); }
 }
 /* main phone: other phones' score docs → a scores pack per phone → the normal merge (conflicts flagged, never overwritten) */
 function syncOnScores(docs){
-  if(S.role === "ro") return Promise.resolve();
+  if(S.role === "ro" || SYNC.view) return Promise.resolve();
   var byDev = {}, jobs = [];
   docs.forEach(function(d){ if(!d || d.deviceId === S.device.id) return; var sc; try{ sc = JSON.parse(d.score); }catch(e){ return; }
     var seenKey = d.deviceId + "~" + sc.key; if(SYNCRT.seen[seenKey] === d.score) return; SYNCRT.seen[seenKey] = d.score;
@@ -2398,7 +2424,7 @@ function syncFetchSigs(keys){
 }
 /* push own pending scores (+ signatures). setDoc resolves when the server has it; Firestore queues offline writes itself, and SYNC.acked survives restarts. */
 function syncFlush(){
-  if(!SYNC.on || !SYNC.code) return Promise.resolve();
+  if(!SYNC.on || !SYNC.code || SYNC.view) return Promise.resolve();
   var keys = syncPending(); syncPaint(); if(!keys.length) return Promise.resolve();
   return syncTransport().then(function(t){
     return Promise.all(keys.map(function(k){
@@ -2433,7 +2459,7 @@ function syncCreate(){
     var txt = JSON.stringify(syncPackObj()); if(txt.length > SYNC_PACK_MAX) throw new Error("The match is too large for a live sync room – use stage packs.");
     var h = hashStr(JSON.stringify([S.match, S.stages, S.shooters]));
     return t.setRoom(code, { code: code, matchId: S.matchId, matchName: S.match.name, pack: txt, packHash: h, host: S.device.name || "Main", createdBy: uid, createdAt: nowISO(), updatedAt: nowISO() }).then(function(){
-      Object.assign(SYNC, { on: true, code: code, host: true, acked: {}, sigAcked: {}, packHash: h }); syncSave(); return syncStart().then(function(){ return code; }); }); }); }); });
+      Object.assign(SYNC, { on: true, code: code, host: true, view: false, published: "", acked: {}, sigAcked: {}, packHash: h }); syncSave(); return syncStart().then(function(){ return code; }); }); }); }); });
 }
 function syncJoin(code, assigned){
   code = syncCleanCode(code); if(!code) return Promise.reject(new Error("A match code has 6 letters/digits."));
@@ -2442,12 +2468,42 @@ function syncJoin(code, assigned){
     var p = JSON.parse(room.pack), res = applyStagePack(p, true);
     if(assigned && assigned.length) S.ro.assigned = assigned.slice();
     S.ro.live = code; saveState();
-    Object.assign(SYNC, { on: true, code: code, host: false, acked: {}, sigAcked: {}, packHash: room.packHash || "" }); syncSave();
+    Object.assign(SYNC, { on: true, code: code, host: false, view: false, acked: {}, sigAcked: {}, packHash: room.packHash || "" }); syncSave();
     return syncStart().then(function(){ return { room: room, res: res }; });
   }); });
 }
 function syncPeek(code){ code = syncCleanCode(code); if(!code) return Promise.reject(new Error("A match code has 6 letters/digits.")); return syncTransport().then(function(t){ return t.signIn().then(function(){ return t.getRoom(code); }); }).then(function(r){ if(!r) throw new Error("No live sync room " + code + "."); return JSON.parse(r.pack); }); }
-function syncLeave(){ syncStop(); var n = syncPending().length; Object.assign(SYNC, { on: false, code: "", host: false, acked: {}, sigAcked: {}, packHash: "" }); syncSave(); if(S.ro) delete S.ro.live; saveState(); syncPaint(); return n; }
+function syncLeave(){ var wasView = SYNC.view; syncStop(); var n = syncPending().length; SYNCRT.results = null; Object.assign(SYNC, { on: false, code: "", host: false, view: false, acked: {}, sigAcked: {}, packHash: "" }); syncSave(); if(S.ro && !wasView) delete S.ro.live; if(!wasView) saveState(); syncPaint(); return n; }
+
+/* ---------- published results ---------- */
+var SYNC_RES_MAX = 400000;
+function syncOnResults(d){ SYNCRT.results = d && !d.hidden && d.data ? d : null; syncPaint(); if(SYNC.view && typeof render === "function" && U.tab === "results") render(); }
+function syncPublishResults(hide){
+  if(!SYNC.on || !SYNC.host) return Promise.reject(new Error("Only the main phone in a live room can publish results."));
+  var at = nowISO(), body = { v: 1, hidden: !!hide, publishedAt: at, matchName: String(S.match.name || ""), data: "" };
+  if(!hide){ body.data = JSON.stringify(resultsSnapshot()); if(body.data.length > SYNC_RES_MAX) return Promise.reject(new Error("The results are too large to publish (" + Math.round(body.data.length / 1024) + " KB).")); }
+  return syncTransport().then(function(t){ return t.putResults(SYNC.code, body); }).then(function(){ SYNC.published = hide ? "" : at; syncSave(); syncPaint(); return at; });
+}
+function syncHHMM(iso){ var d = new Date(iso); return isNaN(d) ? "" : ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); }
+function syncBoardHTML(){
+  var d = SYNCRT.results, snap; if(!d) return '<p class="small muted">No results published yet. This updates by itself when the main phone publishes.</p>';
+  try{ snap = JSON.parse(d.data); }catch(e){ return '<p class="small muted">Published results could not be read.</p>'; }
+  var tb = snap.tables || [], i = Math.min(SYNCRT.resTab || 0, Math.max(0, tb.length - 1)), t = tb[i];
+  var h = '<div class="resboard"><div class="msg info"><b>Read-only results</b> · ' + esc(snap.match && snap.match.name || d.matchName) + ' · <b id="pubStamp">Published ' + esc(syncHHMM(d.publishedAt)) + '</b></div><div class="restabs">' +
+    tb.map(function(x, j){ return '<button type="button" data-rtab="' + j + '" class="' + (j === i ? "on" : "") + '">' + esc(x.t) + '</button>'; }).join("") + '</div>';
+  if(t){ h += '<div class="small muted">' + esc(t.s) + '</div><div style="overflow-x:auto"><table class="restable"><tr>' + t.h.map(function(c){ return '<th>' + esc(c) + '</th>'; }).join("") + '</tr>' +
+    (t.r.length ? t.r.map(function(r){ return '<tr>' + r.map(function(c){ return '<td>' + esc(c) + '</td>'; }).join("") + '</tr>'; }).join("") : '<tr><td colspan="' + t.h.length + '">No scores yet.</td></tr>') + '</table></div>'; }
+  return h + '</div>';
+}
+function syncViewJoin(code){
+  code = syncCleanCode(code); if(!code) return Promise.reject(new Error("A match code has 6 letters/digits."));
+  return syncTransport().then(function(t){ return t.signIn().then(function(){ return t.getRoom(code); }).then(function(room){
+    if(!room) throw new Error("No live sync room " + code + " (check the code and the signal).");
+    syncStop(true); SYNCRT.results = null;
+    Object.assign(SYNC, { on: true, code: code, host: false, view: true, acked: {}, sigAcked: {}, packHash: "" }); syncSave();
+    return syncStart().then(function(){ return room; });
+  }); });
+}
 
 /* ---------- Match tab card ---------- */
 function syncBoxInner(){
@@ -2455,10 +2511,13 @@ function syncBoxInner(){
   if(!SYNC.on) return '<p class="small muted">Optional. Needs signal; scoring always works offline and catches up later. Stage and scores packs keep working.</p>' +
     (S.role !== "ro" ? '<button type="button" class="wide primary" id="syncCreateB"' + (S.stages.length ? "" : " disabled") + '>Create a live match room</button>' : "") +
     '<button type="button" class="wide" style="margin-top:8px" id="syncJoinB">Join a room with a match code…</button>';
-  var n = syncPending().length;
+  var n = syncPending().length, st = esc(SYNCRT.status === "connected" ? "connected" : SYNCRT.status === "connecting" ? "connecting…" : SYNCRT.status === "error" ? "error" : "offline – will catch up");
+  if(SYNC.view) return '<div><b>Room ' + esc(SYNC.code) + '</b> · viewing results only (this phone does not score)</div><div class="small" style="margin:6px 0">Status: <b>' + st + '</b></div>' + syncBoardHTML() +
+    '<button type="button" class="wide" style="margin-top:8px" id="syncLeaveB">Stop viewing</button>';
   return '<div><b>Room ' + esc(SYNC.code) + '</b> · ' + (SYNC.host ? "main phone (merges scores)" : "RO phone (sends scores)") + '</div>' +
     '<div class="small" style="margin:6px 0">Status: <b>' + esc(SYNCRT.status === "connected" ? "connected" : SYNCRT.status === "connecting" ? "connecting…" : SYNCRT.status === "error" ? "error" : "offline – will catch up") + '</b> · ' + n + ' pending' + (SYNCRT.err ? '<br><span class="muted">' + esc(SYNCRT.err) + '</span>' : "") + '</div>' +
     (SYNC.host ? '<div class="syncqr" id="syncQR"></div><p class="small muted">RO phones: Match → Live sync → Join, then scan this code or type ' + esc(SYNC.code) + '.</p>' : "") +
+    (SYNC.host ? '<div class="grid2" style="margin-top:8px"><button type="button" id="syncPubB">Publish results</button><button type="button" id="syncUnpubB"' + (SYNC.published ? "" : " disabled") + '>Unpublish</button></div><p class="small muted">' + (SYNC.published ? "Results published " + esc(syncHHMM(SYNC.published)) + " – press again to update." : "Results are not shared until you press Publish.") + '</p>' : '<h4 style="margin:10px 0 4px">Published results</h4>' + syncBoardHTML()) +
     '<button type="button" class="wide danger" style="margin-top:8px" id="syncLeaveB">Leave room (turn live sync off)</button>';
 }
 function syncCard(){ return '<div class="card"><h3><label class="agree' + (SYNC.on ? " on" : "") + '" style="display:inline"><input type="checkbox" id="syncToggle"' + (SYNC.on ? " checked" : "") + (syncConfigured() ? "" : " disabled") + '> Live sync</label></h3><div id="syncBox">' + syncBoxInner() + '</div></div>'; }
@@ -2467,6 +2526,10 @@ function syncBind(){
   box.onclick = function(e){ var b = e.target.closest("button"); if(!b) return;
     if(b.id === "syncCreateB") needName().then(function(ok){ if(ok) syncCreate().then(function(c){ toast("Live room " + c + " created"); render(); }).catch(function(er){ alertMsg(er.message); }); });
     if(b.id === "syncJoinB") syncJoinDialog();
+    if(b.dataset.rtab != null){ SYNCRT.resTab = +b.dataset.rtab; syncPaint(); }
+    if(b.id === "syncPubB"){ var nc = (S.conflicts || []).length;
+      (nc ? ask(nc + " merge conflict" + (nc > 1 ? "s are" : " is") + " not resolved – the published results use the scores currently on this phone. Publish anyway?", { ok: "Publish anyway" }) : Promise.resolve(true)).then(function(ok){ if(ok) syncPublishResults(false).then(function(at){ toast("Results published " + syncHHMM(at)); }).catch(function(er){ alertMsg(er.message); }); }); }
+    if(b.id === "syncUnpubB") syncPublishResults(true).then(function(){ toast("Results unpublished"); }).catch(function(er){ alertMsg(er.message); });
     if(b.id === "syncLeaveB") ask("Leave live room " + SYNC.code + "? Scores stay on this phone" + (syncPending().length ? " (" + syncPending().length + " not yet sent – send a scores pack instead)" : "") + ".", { ok: "Leave", okClass: "danger" }).then(function(ok){ if(ok){ syncLeave(); render(); } });
   };
   var tg = $("syncToggle"); if(tg) tg.onchange = function(){ if(this.checked){ this.checked = false; if(S.role !== "ro" && S.stages.length) box.querySelector("#syncCreateB") && box.querySelector("#syncCreateB").focus(); toast("Create or join a room below"); } else { this.checked = true; box.querySelector("#syncLeaveB").click(); } };
@@ -2475,22 +2538,23 @@ function syncBind(){
 /* room QR: drawn every time the card is (re)painted – syncPaint rewrites #syncBox on each status change */
 function syncDrawQR(){ var q = document.getElementById("syncQR"); if(q && SYNC.code){ try{ q.innerHTML = qrSVG("SSLIVE|" + SYNC.code); }catch(e){ q.textContent = "Could not draw the QR code – type the code instead."; } } }
 function syncJoinDialog(pre){
-  needName().then(function(ok){ if(!ok) return;
-    if(Object.keys(S.scores).length && !S.ro) return alertMsg("This phone holds scores for " + S.match.name + ". Export a backup and start a new match before joining a room as an RO phone.");
+  (function(){
+    var busyMsg = function(){ return Object.keys(S.scores).length && !S.ro ? ("This phone holds scores for " + S.match.name + ". Export a backup and start a new match before joining a room as an RO phone (you can still view results only).") : ""; };
     var o = $("overlay");
-    o.innerHTML = '<h2>Join a live match room</h2><label>Match code</label><input id="sjCode" autocapitalize="characters" maxlength="8" placeholder="e.g. K7M2QX" style="text-transform:uppercase" value="' + esc(pre || "") + '"><div class="grid2" style="margin-top:8px"><button type="button" class="primary" id="sjLook">Next</button><button type="button" id="sjScan">Scan QR</button></div><div id="sjStages"></div><button type="button" class="wide" style="margin-top:10px" id="sjClose">Cancel</button>';
+    o.innerHTML = '<h2>Join a live match room</h2><label>Match code</label><input id="sjCode" autocapitalize="characters" maxlength="8" placeholder="e.g. K7M2QX" style="text-transform:uppercase" value="' + esc(pre || "") + '"><div class="grid2" style="margin-top:8px"><button type="button" class="primary" id="sjLook">Next</button><button type="button" id="sjScan">Scan QR</button></div><button type="button" class="wide" style="margin-top:8px" id="sjView">View results only (no scoring)</button><div id="sjStages"></div><button type="button" class="wide" style="margin-top:10px" id="sjClose">Cancel</button>';
     o.hidden = false; window.scrollTo(0, 0);
     $("sjClose").onclick = function(){ o.hidden = true; o.innerHTML = ""; };
+    $("sjView").onclick = function(){ syncViewJoin($("sjCode").value).then(function(){ o.hidden = true; o.innerHTML = ""; toast("Viewing results for room " + SYNC.code); setTab("match"); }).catch(function(er){ alertMsg(er.message); }); };
     $("sjScan").onclick = function(){ o.hidden = true; startScan(); };
-    $("sjLook").onclick = function(){ var code = $("sjCode").value;
-      syncPeek(code).then(function(p){
+    $("sjLook").onclick = function(){ var code = $("sjCode").value; if(busyMsg()) return alertMsg(busyMsg());
+      needName().then(function(ok){ if(!ok) throw new Error("");  return syncPeek(code); }).then(function(p){
         $("sjStages").innerHTML = '<p><b>' + esc(p.match && p.match.name) + '</b> – ' + p.shooters.length + ' shooters. Stages this phone scores:</p>' + p.stages.map(function(st){ return '<label class="agree"><input type="checkbox" data-sj="' + st.id + '"> Stage ' + st.no + ' – ' + esc(st.title) + '</label>'; }).join("") + '<button type="button" class="primary wide" id="sjGo">Join as RO phone</button>';
         $("sjGo").onclick = function(){ var ids = Array.prototype.filter.call(o.querySelectorAll("[data-sj]"), function(c){ return c.checked; }).map(function(c){ return c.dataset.sj; }); if(!ids.length) return alertMsg("Tick at least one stage.");
           syncJoin(code, ids).then(function(){ o.hidden = true; o.innerHTML = ""; toast("Joined live room " + SYNC.code); render(); }).catch(function(er){ alertMsg(er.message); }); };
-      }).catch(function(er){ alertMsg(er.message); });
+      }).catch(function(er){ if(er.message) alertMsg(er.message); });
     };
-    if(pre) $("sjLook").click();
-  });
+    if(pre && !busyMsg()) $("sjLook").click();
+  })();
 }
 function syncBoot(){
   syncLoad();
@@ -2559,7 +2623,7 @@ function boot(){
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later" }).then(function(v){ if(v && v.trim()){ S.device.name = v.trim(); saveState(); render(); } }); }, 300);
   if("serviceWorker" in navigator && location.protocol !== "file:") setupUpdates();
 }
-window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, sync: { get state(){ return SYNC; }, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; } };
+window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; } };
 document.addEventListener("DOMContentLoaded", boot);
 
 /* updates: a new version (new sw.js build hash) installs in the background; the user is told and reloads when ready */
