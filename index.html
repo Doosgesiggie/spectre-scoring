@@ -2328,7 +2328,7 @@ function syncPaint(){
   var el = document.getElementById("syncChip"), top = document.querySelector("header.top");
   if(!el && top){ el = document.createElement("button"); el.type = "button"; el.id = "syncChip"; el.className = "syncchip"; el.onclick = function(){ setTab("match"); }; top.insertBefore(el, document.getElementById("devChip")); }
   if(el){ el.hidden = !SYNC.on; el.textContent = syncLabel(); el.dataset.st = SYNCRT.status; el.title = SYNCRT.err || ("Live sync room " + SYNC.code); }
-  var b = document.getElementById("syncBox"); if(b) b.innerHTML = syncBoxInner();
+  var b = document.getElementById("syncBox"); if(b){ b.innerHTML = syncBoxInner(); syncDrawQR(); }
 }
 
 /* ---------- transport: Firebase (real) or window.SS_SYNC_TRANSPORT (tests) ---------- */
@@ -2470,8 +2470,10 @@ function syncBind(){
     if(b.id === "syncLeaveB") ask("Leave live room " + SYNC.code + "? Scores stay on this phone" + (syncPending().length ? " (" + syncPending().length + " not yet sent – send a scores pack instead)" : "") + ".", { ok: "Leave", okClass: "danger" }).then(function(ok){ if(ok){ syncLeave(); render(); } });
   };
   var tg = $("syncToggle"); if(tg) tg.onchange = function(){ if(this.checked){ this.checked = false; if(S.role !== "ro" && S.stages.length) box.querySelector("#syncCreateB") && box.querySelector("#syncCreateB").focus(); toast("Create or join a room below"); } else { this.checked = true; box.querySelector("#syncLeaveB").click(); } };
-  var q = $("syncQR"); if(q && SYNC.code){ try{ q.innerHTML = qrSVG("SSLIVE|" + SYNC.code); }catch(e){} }
+  syncDrawQR();
 }
+/* room QR: drawn every time the card is (re)painted – syncPaint rewrites #syncBox on each status change */
+function syncDrawQR(){ var q = document.getElementById("syncQR"); if(q && SYNC.code){ try{ q.innerHTML = qrSVG("SSLIVE|" + SYNC.code); }catch(e){ q.textContent = "Could not draw the QR code – type the code instead."; } } }
 function syncJoinDialog(pre){
   needName().then(function(ok){ if(!ok) return;
     if(Object.keys(S.scores).length && !S.ro) return alertMsg("This phone holds scores for " + S.match.name + ". Export a backup and start a new match before joining a room as an RO phone.");
