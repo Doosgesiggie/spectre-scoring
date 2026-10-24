@@ -162,6 +162,11 @@ details > summary{cursor:pointer;font-weight:700;min-height:44px;display:flex;al
 #updBar{position:fixed;left:8px;right:8px;bottom:calc(76px + env(safe-area-inset-bottom));z-index:60;display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:12px;background:#14284b;color:#fff;box-shadow:0 4px 18px rgba(0,0,0,.35);font-weight:700}
 #updBar span{flex:1}
 #updBar button{min-height:40px;padding:6px 12px}
+
+/* live sync */
+.syncchip{min-height:36px;padding:3px 8px;margin-right:6px;font-size:.75em;background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,.6);white-space:nowrap}
+.syncchip[data-st=connected]{border-color:#5fd38d}.syncchip[data-st=offline],.syncchip[data-st=connecting]{border-color:#f0c040}.syncchip[data-st=error]{border-color:#ff6b6b}
+.syncqr svg{width:200px;height:200px;display:block;margin:8px auto;background:#fff}
 </style>
 </head>
 <body>
@@ -335,6 +340,9 @@ var TYPES = {
   cbarrel:   { n: "Barrel (blue)",        k: "prop", pre: "BB" },
   vtac:      { n: "V-Tac barricade",      k: "line", pre: "VT", oneClick: 1.2 },
   wall:      { n: "Wall",                 k: "line" },
+  concrete:  { n: "Concrete wall (fixed)", k: "line", oneClick: 3, infra: true },
+  tyres:     { n: "Tyre wall (fixed)",    k: "line", oneClick: 2.4, infra: true },
+  backstop:  { n: "Backstop (270° range)", k: "line", oneClick: 6, infra: true },
   fault:     { n: "Fault line",           k: "line" },
   door:      { n: "Door",                 k: "prop", w: 0.9 },
   port:      { n: "Window / port",        k: "prop", w: 0.6 },
@@ -348,12 +356,14 @@ var FPAL_GROUPS = [
   ["Steel", ["steel_fall","popper","steel_hang","lr_plate","steel_torso"]],
   ["Positions", ["sp","cone","start"]],
   ["Barrels & V-Tac", ["cbarrel","barrel","vtac"]],
-  ["Props", ["wall","door","port","table","barricade","fault","text"]]
+  ["Props", ["wall","door","port","table","barricade","fault","text"]],
+  ["Range infrastructure", ["concrete","tyres","backstop"]]
 ];
 var PALETTE = [
   ["Targets", ["ipsc","idpa","bh","qit","noshoot","steel_fall","steel_hang","popper","lr_plate","steel_torso"]],
   ["Positions", ["sp","cone","start"]],
-  ["Props", ["cbarrel","vtac","barrel","wall","door","port","table","barricade","fault","text"]]
+  ["Props", ["cbarrel","vtac","barrel","wall","door","port","table","barricade","fault","text"]],
+  ["Range infrastructure", ["concrete","tyres","backstop"]]
 ];
 function isTarget(it){ return TYPES[it.type] && TYPES[it.type].k === "target"; }
 function isSteel(it){ return !!(TYPES[it.type] && TYPES[it.type].steel); }
@@ -555,6 +565,8 @@ function sgPartText(sg){
   if(b) out.push((b > 1 ? b + " × " : "") + "1 rd buckshot, 2 best pairs");
   return out.join(" + ");
 }
+/* stage uses the shotgun only: default 1 round per target */
+function sgOnly(st){ return st.firearms.length === 1 && st.firearms[0] === "shotgun"; }
 function defaultReq(st, t){
   var tr = targetRounds(st, t.id);
   /* one-hit steel: 1 hit on unlimited and limited stages alike */
@@ -573,7 +585,7 @@ function defaultReq(st, t){
     return { mode: "sg", n: 2 + sgN, need: null, desc: "best 2 " + ofa + " + " + sgPartText(tr.sg) };
   }
   if(st.limited && tr.any && tr.fixed && tr.rounds > 0) return { mode: "all", n: tr.rounds };
-  if(tr.firearms.length === 1 && tr.firearms[0] === "shotgun") return { mode: "fixed", n: 1, why: "shotgun" };
+  if((tr.firearms.length === 1 && tr.firearms[0] === "shotgun") || (!tr.any && sgOnly(st))) return { mode: "fixed", n: 1, why: "shotgun" };
   return { mode: "best2", n: 2 };
 }
 /* returns { mode, n (required hits), scored, text, short, auto } */
@@ -930,9 +942,51 @@ function labelPos(it, u){
   if(isTarget(it)) return { dy: -0.66 * u };
   return null;
 }
+
+/* fixed range infrastructure: concrete wall, tyre wall, 270° backstop (line items, drawn to scale in metres) */
+var INFRA_C = { concrete: "#8d8f91", concreteS: "#4a4c4e", tyre: "#1b1b1b", tyreIn: "#6d6d6d", berm: "#7a5230", bermS: "#4a3018", safe: "#2e7d32" };
+function infraSVG(it, u, o, attrs, sel){
+  var X1 = n2(it.x), Y1 = n2(-it.y), X2 = n2(it.x2), Y2 = n2(-it.y2), out = '<g' + attrs + ' class="it it-' + it.type + '">';
+  var L = Math.hypot(it.x2 - it.x, it.y2 - it.y) || 0.001, ux = (it.x2 - it.x) / L, uy = -(it.y2 - it.y) / L, nx = uy, ny = -ux; /* svg coords; n = left normal (downrange for a left→right line) */
+  var ang = Math.atan2(uy, ux) * 180 / Math.PI, tang = ang > 90 || ang < -90 ? ang + 180 : ang, mx = (it.x + it.x2) / 2, my = -(it.y + it.y2) / 2;
+  if(o.edit) out += '<line x1="' + X1 + '" y1="' + Y1 + '" x2="' + X2 + '" y2="' + Y2 + '" stroke="transparent" stroke-width="' + n2(Math.max(u * 0.6, 0.8)) + '"/>';
+  if(it.type === "concrete"){
+    var w = 0.4;
+    out += '<line x1="' + X1 + '" y1="' + Y1 + '" x2="' + X2 + '" y2="' + Y2 + '" stroke="' + INFRA_C.concreteS + '" stroke-width="' + n2(w + 0.08) + '" stroke-linecap="butt"/>';
+    out += '<line x1="' + X1 + '" y1="' + Y1 + '" x2="' + X2 + '" y2="' + Y2 + '" stroke="' + INFRA_C.concrete + '" stroke-width="' + n2(w) + '" stroke-linecap="butt"/>';
+    var nb = Math.max(1, Math.round(L / 1.2));
+    for(var k = 1; k < nb; k++){ var px = it.x + (it.x2 - it.x) * k / nb, py = -(it.y + (it.y2 - it.y) * k / nb);
+      out += '<line x1="' + n2(px - nx * w / 2) + '" y1="' + n2(py - ny * w / 2) + '" x2="' + n2(px + nx * w / 2) + '" y2="' + n2(py + ny * w / 2) + '" stroke="' + INFRA_C.concreteS + '" stroke-width="0.04"/>'; }
+    for(var j = 0; j < L / 0.35; j++){ var f = (j + 0.5) / (L / 0.35), sx = it.x + (it.x2 - it.x) * f, sy = -(it.y + (it.y2 - it.y) * f), off = ((j * 37) % 7 - 3) / 3 * w * 0.3;
+      out += '<circle cx="' + n2(sx + nx * off) + '" cy="' + n2(sy + ny * off) + '" r="0.025" fill="#6b6d6f"/>'; }
+  } else if(it.type === "tyres"){
+    var r = 0.3, nt = Math.max(1, Math.round(L / (2 * r)));
+    for(var t = 0; t < nt; t++){ var g = (t + 0.5) / nt, cx = it.x + (it.x2 - it.x) * g, cy = -(it.y + (it.y2 - it.y) * g);
+      out += '<circle cx="' + n2(cx) + '" cy="' + n2(cy) + '" r="' + n2(r * 0.96) + '" fill="' + INFRA_C.tyre + '"/><circle cx="' + n2(cx) + '" cy="' + n2(cy) + '" r="' + n2(r * 0.62) + '" fill="none" stroke="' + INFRA_C.tyreIn + '" stroke-width="0.04" stroke-dasharray="0.06 0.05"/><circle cx="' + n2(cx) + '" cy="' + n2(cy) + '" r="' + n2(r * 0.4) + '" fill="#cfcfcf"/>'; }
+  } else {
+    var bw = 0.7;
+    out += '<line x1="' + X1 + '" y1="' + Y1 + '" x2="' + X2 + '" y2="' + Y2 + '" stroke="' + INFRA_C.bermS + '" stroke-width="' + n2(bw + 0.1) + '" stroke-linecap="round"/>';
+    out += '<line x1="' + X1 + '" y1="' + Y1 + '" x2="' + X2 + '" y2="' + Y2 + '" stroke="' + INFRA_C.berm + '" stroke-width="' + n2(bw) + '" stroke-linecap="round"/>';
+    out += '<text x="' + n2(mx) + '" y="' + n2(my) + '" dy="0.17" text-anchor="middle" font-size="0.46" font-weight="800" fill="#fff" letter-spacing="0.03" font-family="Barlow Condensed,Bahnschrift,Arial Narrow,sans-serif" transform="rotate(' + n2(tang) + ' ' + n2(mx) + ' ' + n2(my) + ')">Backstop</text>';
+  }
+  if(it.label){ var lx = mx + nx * -0.6, ly = my + ny * -0.6; out += '<text x="' + n2(lx) + '" y="' + n2(ly) + '" text-anchor="middle" font-size="' + n2(u * 0.3) + '" fill="#333" font-weight="700">' + esc(it.label) + '</text>'; }
+  if(sel){
+    out += '<line x1="' + X1 + '" y1="' + Y1 + '" x2="' + X2 + '" y2="' + Y2 + '" stroke="#1f6fff" stroke-width="' + n2(u * 0.04) + '" stroke-dasharray="' + n2(u * 0.15) + '"/>';
+    out += '<circle data-h="a" data-hid="' + it.id + '" cx="' + X1 + '" cy="' + Y1 + '" r="' + n2(u * 0.18) + '" fill="#fff" stroke="#1f6fff" stroke-width="' + n2(u * 0.05) + '"/>';
+    out += '<circle data-h="b" data-hid="' + it.id + '" cx="' + X2 + '" cy="' + Y2 + '" r="' + n2(u * 0.18) + '" fill="#fff" stroke="#1f6fff" stroke-width="' + n2(u * 0.05) + '"/>';
+  }
+  return out + '</g>';
+}
+/* small key / palette icons for the infrastructure types */
+function infraIcon(t, vb){
+  if(t === "concrete") return '<svg viewBox="' + vb + '"><rect x="-0.55" y="-0.11" width="1.1" height="0.22" fill="' + INFRA_C.concrete + '" stroke="' + INFRA_C.concreteS + '" stroke-width="0.04"/><path d="M-0.18,-0.11 V0.11 M0.18,-0.11 V0.11" stroke="' + INFRA_C.concreteS + '" stroke-width="0.03"/></svg>';
+  if(t === "tyres") return '<svg viewBox="' + vb + '">' + [-0.4, 0, 0.4].map(function(x){ return '<circle cx="' + x + '" cy="0" r="0.19" fill="' + INFRA_C.tyre + '"/><circle cx="' + x + '" cy="0" r="0.08" fill="#cfcfcf"/>'; }).join("") + '</svg>';
+  return '<svg viewBox="' + vb + '"><line x1="-0.55" y1="0" x2="0.55" y2="0" stroke="' + INFRA_C.berm + '" stroke-width="0.22" stroke-linecap="round"/></svg>';
+}
 function itemSVG(it, u, o){
   var T = TYPES[it.type], sel = o.sel && o.sel[it.id], out = "";
   var attrs = o.edit ? ' data-id="' + it.id + '"' : "";
+  if(isLine(it) && TYPES[it.type].infra) return infraSVG(it, u, o, attrs, sel);
   if(isLine(it)){
     var X1 = n2(it.x), Y1 = n2(-it.y), X2 = n2(it.x2), Y2 = n2(-it.y2);
     var col = it.type === "wall" ? C.wall : it.type === "vtac" ? C.vtac : "#a0522d", w = it.type === "wall" ? u * 0.11 : it.type === "vtac" ? u * 0.2 : u * 0.07;
@@ -966,7 +1020,7 @@ function itemSVG(it, u, o){
   } else {
     out += '<g transform="rotate(' + (it.rot || 0) + ')">' + symbol(it, u) + '</g>';
     var lp = labelPos(it, u);
-    if(lp && it.label){
+    if(lp && it.label && !(o.print && isTarget(it))){
       var inside = lp.inside, fill = inside ? (it.type === "sp" ? C.navy : "#fff") : "#111";
       var fs = inside ? (it.type === "start" ? u * 0.24 : (it.label.length > 3 ? u * 0.24 : u * 0.32)) : u * 0.34;
       out += '<text class="lbl" text-anchor="middle" y="' + n2(lp.dy) + '" font-size="' + n2(fs) + '" font-weight="800" fill="' + fill + '" font-family="Barlow Condensed,Bahnschrift,Arial Narrow,sans-serif">' + esc(it.label) + '</text>';
@@ -1017,6 +1071,7 @@ function sceneSVG(st, u, o){
   var low = items.filter(function(i){ return layerOrder(i) <= 1; }), high = items.filter(function(i){ return layerOrder(i) > 1; });
   var s = "";
   low.forEach(function(it){ s += itemSVG(it, u, o); });
+  if(o.print){ var pl = printLayout(st, u); s += pl.lines + pathSVG(st, u); high.forEach(function(it){ s += itemSVG(it, u, o); }); return s + pl.labels; }
   s += sightLines(st, u) + pathSVG(st, u);
   high.forEach(function(it){ s += itemSVG(it, u, o); });
   return s;
@@ -1042,7 +1097,7 @@ function diagramSVG(st, wmm, hmm, opts){
   var minX = cx - vw / 2, minY = cyTop - (vh - bh) * 0.32;
   var s = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + n2(minX) + ' ' + n2(minY) + ' ' + n2(vw) + ' ' + n2(vh) + '"' + (opts.px ? ' width="' + opts.px[0] + '" height="' + opts.px[1] + '"' : ' preserveAspectRatio="xMidYMid meet"') + ' font-family="Barlow,Segoe UI,Arial,sans-serif">' + svgDefs();
   if(opts.bg) s += '<rect x="' + n2(minX) + '" y="' + n2(minY) + '" width="' + n2(vw) + '" height="' + n2(vh) + '" fill="#fff"/>';
-  s += sceneSVG(st, u, {});
+  s += sceneSVG(st, u, { print: true });
   /* DOWNRANGE arrow */
   var ax = minX + vw * 0.035, ay = minY + vh * 0.45, al = vh * 0.18, fs = Math.min(vw, vh) * 0.028, dr = +st.downrange || 0;
   s += '<g class="drarrow" transform="rotate(' + n2(dr) + ' ' + n2(ax) + ' ' + n2(ay - al / 2) + ')"><line x1="' + n2(ax) + '" y1="' + n2(ay) + '" x2="' + n2(ax) + '" y2="' + n2(ay - al) + '" stroke="#4a5160" stroke-width="' + n2(fs * 0.18) + '"/><polygon points="' + n2(ax - fs * 0.45) + ',' + n2(ay - al) + ' ' + n2(ax + fs * 0.45) + ',' + n2(ay - al) + ' ' + n2(ax) + ',' + n2(ay - al - fs * 0.9) + '" fill="#4a5160"/>';
@@ -1058,8 +1113,121 @@ function keySymbol(type, extra){
   var it = Object.assign({ type: type, x: 0, y: 0, rot: 0, label: "" }, extra || {});
   return '<svg viewBox="-0.6 -0.6 1.2 1.2" xmlns="http://www.w3.org/2000/svg">' + svgDefs() + '<g>' + symbol(it, 1) + '</g></svg>';
 }
+
+/* ---- print / export only: grouped steel sight lines, merged distance tags, label collision avoidance ---- */
+function distRangeText(ds){ var a = Math.min.apply(null, ds), b = Math.max.apply(null, ds), fa = fmtM(a), fb = fmtM(b); return fa === fb ? fa : fa.replace(" m", "") + "–" + fb; }
+function boxHit(a, b){ return a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0; }
+function printLayout(st, u){
+  var items = byId(st), seen = {}, pairs = [];
+  st.engagements.forEach(function(e){ var p = items[e.pos], t = items[e.target]; if(!p || !t) return; var k = p.id + ">" + t.id; if(seen[k]) return; seen[k] = 1; var d = dist(p, t); if(d < 0.01) return; pairs.push({ e: e, p: p, t: t, d: d }); });
+  /* 1. per position: cluster engaged steel within 1.5 m (chained) */
+  var byPos = {}, posOrder = [];
+  pairs.forEach(function(q){ if(!byPos[q.p.id]){ byPos[q.p.id] = []; posOrder.push(q.p.id); } byPos[q.p.id].push(q); });
+  var rays = []; /* { p, tx, ty, ds:[], ids:[], tlabels:[], grp } */
+  posOrder.forEach(function(pid){
+    var qs = byPos[pid], steel = qs.filter(function(q){ return isSteel(q.t); }), par = {};
+    steel.forEach(function(q){ par[q.t.id] = q.t.id; });
+    function f(x){ while(par[x] !== x) x = par[x] = par[par[x]]; return x; }
+    for(var i = 0; i < steel.length; i++) for(var j = i + 1; j < steel.length; j++) if(dist(steel[i].t, steel[j].t) < 1.45) par[f(steel[i].t.id)] = f(steel[j].t.id);
+    var groups = {}, done = {};
+    steel.forEach(function(q){ var r = f(q.t.id); (groups[r] = groups[r] || []).push(q); });
+    qs.forEach(function(q){
+      if(done[q.t.id]) return;
+      var g = isSteel(q.t) ? groups[f(q.t.id)] : [q];
+      g.forEach(function(x){ done[x.t.id] = 1; });
+      var tx = 0, ty = 0; g.forEach(function(x){ tx += x.t.x; ty += x.t.y; }); tx /= g.length; ty /= g.length;
+      rays.push({ p: q.p, tx: tx, ty: ty, ds: g.map(function(x){ return x.d; }), ids: g.map(function(x){ return x.e.id; }), tlabels: g.map(function(x){ return x.t.label; }), grp: g.length > 1 });
+    });
+  });
+  /* lines */
+  var lines = "";
+  rays.forEach(function(r){
+    var p = r.p, d = Math.hypot(r.tx - p.x, r.ty - p.y); if(d < 0.01) return; r.len = d;
+    var ux = (r.tx - p.x) / d, uy = (r.ty - p.y) / d, r0 = Math.min(0.55 * u, d / 3), r1 = Math.min((r.grp ? 0.8 : 0.62) * u, d / 3);
+    r.x1 = p.x + ux * r0; r.y1 = p.y + uy * r0; r.x2 = r.tx - ux * r1; r.y2 = r.ty - uy * r1; r.ang = Math.atan2(uy, ux);
+    lines += '<line class="sight' + (r.grp ? " sight-grp" : "") + '" data-eng="' + r.ids.join(" ") + '" x1="' + n2(r.x1) + '" y1="' + n2(-r.y1) + '" x2="' + n2(r.x2) + '" y2="' + n2(-r.y2) + '" stroke="' + C.sight + '" stroke-width="' + n2(u * (r.grp ? 0.06 : 0.045)) + '" stroke-dasharray="' + n2(u * 0.18) + ' ' + n2(u * 0.12) + '" marker-end="url(#arrSight)"/>';
+  });
+  rays = rays.filter(function(r){ return r.len; });
+  /* 2. tags: merge near-identical length + close angle from the same SP (non-group rays) */
+  var tags = [];
+  rays.forEach(function(r){
+    var txt0 = distRangeText(r.ds);
+    if(!r.grp){ var m = tags.filter(function(t){ return !t.grp && t.p === r.p && Math.abs(t.d - r.ds[0]) < 0.5 && Math.abs(Math.atan2(Math.sin(t.ang - r.ang), Math.cos(t.ang - r.ang))) < 0.26; })[0];
+      if(m){ m.rays.push(r); m.ds.push(r.ds[0]); return; } }
+    tags.push({ p: r.p, d: r.ds[0], ang: r.ang, grp: r.grp, rays: [r], ds: r.ds.slice(), txt: r.grp ? labelRanges(r.tlabels) + " · " + txt0 : null });
+  });
+  tags.forEach(function(t){ if(!t.txt) t.txt = distRangeText(t.ds); });
+  /* obstacles: item symbols and infrastructure */
+  var obs = [];
+  st.items.forEach(function(it){
+    if(it.type === "text") return;
+    if(isLine(it)){ var L = Math.hypot(it.x2 - it.x, it.y2 - it.y), hw = it.type === "backstop" ? 0.42 : it.type === "tyres" ? 0.32 : it.type === "concrete" ? 0.26 : u * 0.12, n = Math.max(1, Math.ceil(L / 0.3));
+      for(var k = 0; k <= n; k++){ var x = it.x + (it.x2 - it.x) * k / n, y = -(it.y + (it.y2 - it.y) * k / n); obs.push({ x0: x - hw, x1: x + hw, y0: y - hw, y1: y + hw }); } return; }
+    var h = isTarget(it) ? (isSteel(it) ? 0.3 : 0.48) : 0.42, w = isTarget(it) ? (isSteel(it) ? 0.3 : 0.36) : 0.42;
+    obs.push({ x0: it.x - w * u, x1: it.x + w * u, y0: -it.y - h * u, y1: -it.y + h * u, id: it.id });
+  });
+  var placed = [], out = "";
+  function free(b, self){ return !placed.some(function(q){ return boxHit(b, q); }) && !obs.some(function(q){ return q.id !== self && boxHit(b, q); }); }
+  /* 3a. target labels: preferred above (as in the editor), then around, then further out with a leader */
+  var tg = st.items.filter(function(i){ return isTarget(i) && i.label; });
+  tg.forEach(function(it){
+    var lp = labelPos(it, u), fs = u * 0.34, w = fs * 0.62 * it.label.length + u * 0.08, h = fs * 1.25, X = it.x, Y = -it.y;
+    var pref = [X, Y + lp.dy - fs * 0.3], cands = [pref];
+    [[0, 1], [1, 0], [-1, 0], [1, -1], [-1, -1], [1, 1], [-1, 1], [0, -1]].forEach(function(v){ cands.push([X + v[0] * (0.5 * u + w / 2), Y + (v[1] ? v[1] * (0.62 * u + h / 2) : 0)]); });
+    for(var rr = 1.3; rr <= 3.4; rr += 0.7) for(var a = 0; a < 16; a++){ var an = -Math.PI / 2 + a * Math.PI / 8; cands.push([X + Math.cos(an) * rr * u, Y + Math.sin(an) * rr * u]); }
+    var c = cands[0], b;
+    for(var i = 0; i < cands.length; i++){ b = { x0: cands[i][0] - w / 2, x1: cands[i][0] + w / 2, y0: cands[i][1] - h / 2, y1: cands[i][1] + h / 2 }; if(free(b, it.id)){ c = cands[i]; break; } if(i === cands.length - 1) b = { x0: c[0] - w / 2, x1: c[0] + w / 2, y0: c[1] - h / 2, y1: c[1] + h / 2 }; }
+    b = { x0: c[0] - w / 2, x1: c[0] + w / 2, y0: c[1] - h / 2, y1: c[1] + h / 2 }; placed.push(b);
+    var far = Math.hypot(c[0] - X, c[1] - Y) > 1.1 * u;
+    if(far) out += '<line class="leader" x1="' + n2(X) + '" y1="' + n2(Y) + '" x2="' + n2(c[0]) + '" y2="' + n2(c[1]) + '" stroke="#555" stroke-width="' + n2(u * 0.025) + '"/>';
+    out += '<text class="lbl plbl" data-for="' + it.id + '" data-box="' + [b.x0, b.y0, b.x1, b.y1].map(n2).join(",") + '" x="' + n2(c[0]) + '" y="' + n2(c[1] + fs * 0.3) + '" text-anchor="middle" font-size="' + n2(fs) + '" font-weight="800" fill="#111"' + (far ? ' paint-order="stroke" stroke="#fff" stroke-width="' + n2(u * 0.06) + '"' : "") + ' font-family="Barlow Condensed,Bahnschrift,Arial Narrow,sans-serif">' + esc(it.label) + '</text>';
+  });
+  /* 3b. distance tags: slide along the line, then step off it */
+  var tagsOut = "";
+  tags.forEach(function(t){
+    var w = u * (0.26 + 0.17 * t.txt.length), h = u * 0.4, cands = [];
+    var rs = t.rays, ax = 0, ay = 0, bx = 0, by = 0; rs.forEach(function(r){ ax += r.p.x; ay += r.p.y; bx += r.tx; by += r.ty; }); ax /= rs.length; ay /= rs.length; bx /= rs.length; by /= rs.length;
+    var L = Math.hypot(bx - ax, by - ay) || 1, nx = -(by - ay) / L, ny = (bx - ax) / L;
+    [0.55, 0.45, 0.65, 0.35, 0.72, 0.28, 0.8].forEach(function(f){ cands.push([ax + (bx - ax) * f, -(ay + (by - ay) * f)]); });
+    [0.55, 0.45, 0.65, 0.35].forEach(function(f){ [1, -1, 2, -2].forEach(function(s){ cands.push([ax + (bx - ax) * f + nx * s * 0.55 * u, -(ay + (by - ay) * f + ny * s * 0.55 * u)]); }); });
+    var c = null, b;
+    for(var i = 0; i < cands.length; i++){ b = { x0: cands[i][0] - w / 2, x1: cands[i][0] + w / 2, y0: cands[i][1] - h / 2, y1: cands[i][1] + h / 2 }; if(free(b)){ c = cands[i]; break; } }
+    if(!c){ c = cands[0]; b = { x0: c[0] - w / 2, x1: c[0] + w / 2, y0: c[1] - h / 2, y1: c[1] + h / 2 }; }
+    placed.push(b);
+    tagsOut += distLabel(c[0], c[1], t.txt, u, C.sight).replace('<g class="dlbl">', '<g class="dlbl" data-box="' + [b.x0, b.y0, b.x1, b.y1].map(n2).join(",") + '">');
+  });
+  return { lines: lines + tagsOut, labels: out };
+}
+/* labelRanges copied verbatim from Stage Designer src/f-print.js (needed by c-svg.js sight-line tags) */
+function labelRanges(labels){
+  var groups = {}, order = [];
+  labels.forEach(function(l){ var m = /^([A-Za-z]+)(\d+)$/.exec(l); var k = m ? m[1] : l; if(!groups[k]){ groups[k] = []; order.push(k); } groups[k].push(m ? +m[2] : l); });
+  var out = [];
+  order.forEach(function(k){
+    var v = groups[k]; if(typeof v[0] !== "number"){ out.push(v.join(", ")); return; }
+    v = v.slice().sort(function(a, b){ return a - b; });
+    var runs = [], s = v[0], p = v[0];
+    for(var i = 1; i <= v.length; i++){ if(i < v.length && v[i] === p + 1){ p = v[i]; continue; } runs.push(s === p ? k + s : (p === s + 1 ? k + s + ", " + k + p : k + s + "–" + k + p)); if(i < v.length){ s = p = v[i]; } }
+    out.push(runs.join(", "));
+  });
+  return out.join(", ");
+}
 </script>
 <script>
+/* ===================== FIREBASE CONFIG – FILL IN HERE =====================
+   Live sync is optional. Filled in 24 Oct 2026 for project spectre-scoring-5ddda (Firestore africa-south1). If they are ever cleared/placeholdered
+   (Firebase console → Project settings → Your apps → Web app → SDK setup → Config),
+   the "Live sync" switch stays disabled and the app works exactly as before.
+   Only apiKey, authDomain, projectId and appId are used. These values are not secret;
+   access is controlled by firestore.rules + Anonymous Auth.                          */
+var SS_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBxXZ-OuYOYHf-QDnH9k0Gr28bnI5t0T-w",
+  authDomain: "spectre-scoring-5ddda.firebaseapp.com",
+  projectId: "spectre-scoring-5ddda",
+  appId: "1:318620464890:web:568f4a9f1ed9408f1afb43"
+};
+var SS_FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.14.1/"; /* modular ESM, loaded only when live sync is switched on */
+/* ========================================================================== */
 /* ===================== Spectre Scoring – core: data, storage, imports, scoring maths ===================== */
 var SS_APP = "spectre-scoring", SS_VER = "Version 1.0", SS_SCHEMA = 1;
 var SS_KEY = "spectreScoring.v1", SS_UNDO_KEY = "spectreScoring.undo", SS_PREF_KEY = "spectreScoring.prefs";
@@ -1091,7 +1259,7 @@ function fixState(o){
   return o;
 }
 function renumber(o){ o = o || S; var used = {}; o.stages.forEach(function(st, i){ if(!st.no || used[st.no]) st.no = i + 1; used[st.no] = 1; }); o.stages.sort(function(a, b){ return a.no - b.no; }); }
-function saveState(){ try{ localStorage.setItem(SS_KEY, JSON.stringify(S)); return true; }catch(e){ alertMsg("Could not save on this phone (storage full?). Export a backup now.\n" + e.message); return false; } }
+function saveState(){ try{ localStorage.setItem(SS_KEY, JSON.stringify(S)); if(typeof syncAfterSave === "function") syncAfterSave(); return true; }catch(e){ alertMsg("Could not save on this phone (storage full?). Export a backup now.\n" + e.message); return false; } }
 var PREFS = { dark: false, big: false };
 function loadPrefs(){ try{ Object.assign(PREFS, JSON.parse(localStorage.getItem(SS_PREF_KEY) || "{}")); }catch(e){} }
 function savePrefs(){ try{ localStorage.setItem(SS_PREF_KEY, JSON.stringify(PREFS)); }catch(e){} }
@@ -1588,7 +1756,7 @@ function applyStagePack(p, force){
   saveState(); return { ok: true, stages: p.stages.length, shooters: p.shooters.length };
 }
 /* main phone merges a scores pack: new scores are added, identical ones skipped, different ones become conflicts */
-function mergeScoresPack(p){
+function mergeScoresPack(p, opts){
   if(S.role === "ro") throw new Error("This is an RO phone. Scores packs are merged on the main phone.");
   if(p.matchId !== S.matchId) throw new Error("This scores pack is for a different match (" + (p.match && p.match.name || "?") + ").");
   if(!Array.isArray(p.scores)) throw new Error("This scores pack is damaged (no scores).");
@@ -1603,7 +1771,7 @@ function mergeScoresPack(p){
     if(dup){ r.conflicts++; return; }
     S.conflicts.push({ id: sid(), key: inc.key, local: clone(loc), incoming: clone(inc), from: r.from, at: nowISO() }); r.conflicts++;
   });
-  S.merged.push({ at: nowISO(), from: r.from, packId: p.packId, added: r.added, same: r.same, conflicts: r.conflicts });
+  if(!(opts && opts.live) || r.added || r.conflicts) S.merged.push({ at: nowISO(), from: r.from + (opts && opts.live ? " (live)" : ""), packId: p.packId, added: r.added, same: r.same, conflicts: r.conflicts });
   saveState(); return Promise.all(sigJobs).then(function(){ return r; });
 }
 function resolveConflict(id, take){
@@ -1683,6 +1851,7 @@ function render(){
   document.body.classList.toggle("entry", inEntry);
   Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function(b){ b.classList.toggle("on", b.dataset.tab === U.tab); });
   var role = S.role === "ro" ? "RO" : "Main", nm = S.device.name || "Name this phone"; $("devChip").textContent = new RegExp("\\b" + role + "\\b", "i").test(nm) ? nm : nm + " · " + role;
+  if(typeof syncPaint === "function") syncPaint();
   if(U.tab === "score"){ if(U.screen === "entry") renderEntry(); else if(U.screen === "confirm") renderConfirm(); else if(U.screen === "shooters" && stageById(U.stage)) renderPick(); else { U.screen = "stages"; renderStages(); } }
   else if(U.tab === "results") renderResults();
   else if(U.tab === "shooters") renderShooters();
@@ -1980,13 +2149,14 @@ function renderMatch(){
   h += '<div class="card"><h3>Import</h3><button type="button" class="primary wide" data-act="import">Import a file…</button><p class="small muted">Stage Designer match or stage file (any version), shooters CSV, a stage pack, a scores pack or a backup – the type is detected.</p><button type="button" class="wide" data-act="scan">Scan QR codes…</button></div>';
   if(!ro){
     h += '<div class="card"><h3>Stages (' + S.stages.length + ')</h3>' + (S.stages.length ? '<ul class="list-plain">' + S.stages.map(function(st){ return '<li class="row"><span class="grow"><b>Stage ' + st.no + '</b> – ' + esc(st.title) + '<br><span class="small muted">' + st.division + ' · ' + MODELS[st.scoring].n + ' · ' + stageTotal(st).rounds + ' rds · ' + scoredCount(st) + ' scored</span></span><button type="button" class="slim danger" data-delst="' + st.id + '">Remove</button></li>'; }).join("") + '</ul>' + (S.role !== "ro" ? '<div style="margin-top:18px;border-top:1px solid #8884;padding-top:12px"><button type="button" class="danger wide" data-act="clearst">Clear stages…</button></div>' : "") : '<p class="muted">None yet – import the Stage Designer match file.</p>') + '</div>';
-    h += '<div class="card"><h3>RO phones (up to 3)</h3><p class="small muted">No live sync: give each RO phone a stage pack; it scores offline and sends a scores pack back, which this phone merges.</p><button type="button" class="wide primary" data-act="stagepack"' + (S.stages.length ? "" : " disabled") + '>Make a stage pack for an RO phone…</button>' +
+    h += '<div class="card"><h3>RO phones (up to 3)</h3><p class="small muted">Without live sync: give each RO phone a stage pack; it scores offline and sends a scores pack back, which this phone merges.</p><button type="button" class="wide primary" data-act="stagepack"' + (S.stages.length ? "" : " disabled") + '>Make a stage pack for an RO phone…</button>' +
       (S.merged.length ? '<div class="small" style="margin-top:8px"><b>Merged:</b><ul class="list-plain">' + S.merged.slice(-6).reverse().map(function(m){ return "<li>" + esc(m.from) + " – " + fmtWhen(m.at) + ": " + m.added + " new, " + m.same + " same, " + m.conflicts + " conflict(s)</li>"; }).join("") + '</ul></div>' : "") +
       (S.conflicts.length ? '<button type="button" class="wide danger" style="margin-top:8px" data-act="merge">Resolve ' + S.conflicts.length + ' conflict(s)</button>' : "") + '</div>';
   } else {
     var n = Object.keys(S.scores).length;
     h += '<div class="card"><h3>Send scores to the main phone</h3><p class="small">' + n + ' score(s) on this phone. Send the whole set every time – the main phone skips the ones it already has.</p><div class="grid2"><button type="button" class="primary" data-act="scorespack"' + (n ? "" : " disabled") + '>Share file</button><button type="button" data-act="scoresqr"' + (n ? "" : " disabled") + '>Show QR</button></div></div>';
   }
+  h += syncCard();
   h += '<div class="card"><h3>Backup</h3><div class="grid2"><button type="button" data-act="backup">Export backup</button><button type="button" data-act="import">Restore…</button></div><p class="small muted">The backup holds everything (match, stages, shooters, scores, signatures, audit trail). Keep one after each stage.</p></div>';
   h += '<div class="card"><h3>Display</h3><label class="agree' + (PREFS.dark ? " on" : "") + '"><input type="checkbox" id="pDark"' + (PREFS.dark ? " checked" : "") + '> Dark mode</label><label class="agree' + (PREFS.big ? " on" : "") + '"><input type="checkbox" id="pBig"' + (PREFS.big ? " checked" : "") + '> Larger text</label></div>';
   if(S.audit.length) h += '<details class="card"><summary>Audit trail (' + S.audit.length + ')</summary><ul class="list-plain small">' + S.audit.slice().reverse().slice(0, 60).map(function(a){ var p = String(a.key || "").split("|"), st = stageById(p[0]), sh = shooterById(p[1]); return "<li>" + fmtWhen(a.at) + " · " + esc(a.device || "") + "<br><b>" + (st ? "Stage " + st.no + " " : "") + esc(sh ? shName(sh) : "") + "</b> " + esc(a.note || "") + (a.from || a.to ? "<br>" + esc(a.from || "") + " → " + esc(a.to || "") : "") + "</li>"; }).join("") + '</ul></details>';
@@ -1998,6 +2168,7 @@ function renderMatch(){
   bind("mName", function(){ S.match.name = this.value; saveState(); }); bind("mDate", function(){ S.match.date = this.value; saveState(); });
   bind("mMd", function(){ S.match.md = this.value; saveState(); }); bind("mVenue", function(){ S.match.venue = this.value; saveState(); });
   bind("devName", function(){ S.device.name = this.value.trim(); saveState(); render(); });
+  syncBind();
   bind("pDark", function(){ PREFS.dark = this.checked; savePrefs(); render(); }); bind("pBig", function(){ PREFS.big = this.checked; savePrefs(); render(); });
 }
 function fmtWhen(iso){ if(!iso) return ""; var d = new Date(iso); return d.toLocaleDateString("en-ZA", { day: "numeric", month: "short" }) + " " + d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" }); }
@@ -2066,7 +2237,7 @@ function startScan(){
   navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false }).then(function(stream){
     SCAN.stream = stream; var v = $("scanV"); v.srcObject = stream; v.play();
     var det = ("BarcodeDetector" in window) ? new BarcodeDetector({ formats: ["qr_code"] }) : null, cv = document.createElement("canvas"), g = cv.getContext("2d", { willReadFrequently: true }), busy = false, last = "";
-    function handle(text){ if(!text || text === last) return; last = text; var r = scanFeed(text);
+    function handle(text){ if(!text || text === last) return; last = text; var lv = /^SSLIVE\|([A-Z0-9]{6,8})$/.exec(text); if(lv){ stop(); o.hidden = true; o.innerHTML = ""; syncJoinDialog(lv[1]); return; } var r = scanFeed(text);
       if(r.bad){ $("scanMsg").textContent = "That is not a Spectre Scoring code."; return; }
       $("scanMsg").textContent = "Read " + r.have + " of " + r.n + " code(s)…";
       if(r.done){ stop(); r.join.then(function(obj){ o.hidden = true; o.innerHTML = ""; importObject(obj, "QR codes"); }).catch(function(e){ $("scanMsg").textContent = "Could not read the codes: " + e.message; }); }
@@ -2126,6 +2297,206 @@ function importObject(obj, name, txt){
     if(p.kind === "backup") return ask("Restore the backup “" + (p.state.match && p.state.match.name) + "” from " + fmtWhen(p.createdAt) + "? Everything on this phone is replaced.", { ok: "Restore", okClass: "danger" }).then(function(ok){ if(!ok) return; return restoreBackup(p).then(function(){ U.screen = "stages"; U.stage = null; render(); toast("Backup restored"); }); });
   }catch(e){ return alertMsg("Could not use " + name + ":\n" + e.message + "\nNothing was changed."); }
 }
+/* ===================== Live sync (optional, Firebase Firestore + Anonymous Auth) =====================
+   Off by default. Nothing is loaded and nothing touches the network until the user switches it on.
+   Room = rooms/{CODE}: the main phone's match/stages/shooters (a stage pack, as JSON text).
+   Each phone writes its own scores to rooms/{CODE}/scores/{deviceId}~{key}; signatures to rooms/{CODE}/sigs/{key#rev}.
+   The main phone merges other phones' scores with mergeScoresPack – identical skipped, different = conflict (never overwritten).
+   RO phones receive stage/shooter updates through applyStagePack. QR/file packs keep working unchanged.
+   Queue: SYNC.acked[key] = last rev the server confirmed; pending = own scores with a newer rev (kept across restarts).   */
+var SYNC_KEY = "spectreScoring.sync", SYNC_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", SYNC_SIG_MAX = 700000, SYNC_PACK_MAX = 900000;
+var SYNC = { on: false, code: "", host: false, acked: {}, sigAcked: {}, packHash: "" };
+var SYNCRT = { t: null, status: "off", err: "", unsub: [], busy: false, packTimer: null, seen: {} };
+function syncLoad(){ try{ Object.assign(SYNC, JSON.parse(localStorage.getItem(SYNC_KEY) || "{}")); }catch(e){} }
+function syncSave(){ try{ localStorage.setItem(SYNC_KEY, JSON.stringify(SYNC)); }catch(e){} }
+function syncCfg(){ return window.SS_FIREBASE_TEST || window.SS_FIREBASE_CONFIG || {}; } /* SS_FIREBASE_TEST: emulator tests only */
+function syncConfigured(){ var c = syncCfg(); return !!(window.SS_SYNC_TRANSPORT || (c.apiKey && c.projectId && !/REPLACE_ME/.test(c.apiKey + c.projectId + c.appId))); }
+function syncNewCode(){ var s = "", r = new Uint32Array(6); (window.crypto || {}).getRandomValues ? crypto.getRandomValues(r) : r.forEach(function(_, i){ r[i] = Math.random() * 1e9; }); for(var i = 0; i < 6; i++) s += SYNC_CODE_CHARS[r[i] % SYNC_CODE_CHARS.length]; return s; }
+function syncCleanCode(c){ c = String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); return /^[A-Z0-9]{6,8}$/.test(c) ? c : ""; }
+function syncDocId(key){ return encodeURIComponent(S.device.id + "~" + key).replace(/\./g, "%2E"); }
+function hashStr(s){ var h = 0; for(var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return String(h); }
+/* own scores = scored on this phone (merged scores from other phones are theirs to send) */
+function syncOwnKeys(){ return Object.keys(S.scores).filter(function(k){ var s = S.scores[k]; return !s.deviceId || s.deviceId === S.device.id; }); }
+function syncPending(){ return syncOwnKeys().filter(function(k){ return (SYNC.acked[k] || 0) < (S.scores[k].rev || 1); }); }
+function syncSetStatus(st, err){ SYNCRT.status = st; SYNCRT.err = err || ""; syncPaint(); }
+function syncLabel(){
+  if(!SYNC.on) return "";
+  var n = syncPending().length, st = SYNCRT.status;
+  return st === "connected" ? (n ? "Sync · " + n + " pending" : "Synced") : st === "connecting" ? "Sync · connecting" : st === "error" ? "Sync error" : "Offline" + (n ? " · " + n + " pending" : "");
+}
+function syncPaint(){
+  var el = document.getElementById("syncChip"), top = document.querySelector("header.top");
+  if(!el && top){ el = document.createElement("button"); el.type = "button"; el.id = "syncChip"; el.className = "syncchip"; el.onclick = function(){ setTab("match"); }; top.insertBefore(el, document.getElementById("devChip")); }
+  if(el){ el.hidden = !SYNC.on; el.textContent = syncLabel(); el.dataset.st = SYNCRT.status; el.title = SYNCRT.err || ("Live sync room " + SYNC.code); }
+  var b = document.getElementById("syncBox"); if(b) b.innerHTML = syncBoxInner();
+}
+
+/* ---------- transport: Firebase (real) or window.SS_SYNC_TRANSPORT (tests) ---------- */
+function syncTransport(){
+  if(window.SS_SYNC_TRANSPORT) return Promise.resolve(window.SS_SYNC_TRANSPORT);
+  if(SYNCRT.t) return Promise.resolve(SYNCRT.t);
+  var base = window.SS_FIREBASE_SDK, imp = function(u){ return import(u); };
+  return Promise.all([imp(base + "firebase-app.js"), imp(base + "firebase-auth.js"), imp(base + "firebase-firestore.js")]).then(function(m){
+    var A = m[0], Au = m[1], F = m[2], cfg = syncCfg(), app = A.initializeApp(cfg), auth = Au.getAuth(app), db;
+    try{ db = F.initializeFirestore(app, { localCache: F.persistentLocalCache({ tabManager: F.persistentSingleTabManager() }) }); }catch(e){ db = F.getFirestore(app); }
+    if(cfg.emulator){ Au.connectAuthEmulator(auth, "http://" + cfg.emulator + ":9099", { disableWarnings: true }); F.connectFirestoreEmulator(db, cfg.emulator, 8085); }
+    var t = {
+      signIn: function(){ return auth.currentUser ? Promise.resolve(auth.currentUser.uid) : Au.signInAnonymously(auth).then(function(c){ return c.user.uid; }); },
+      uid: function(){ return auth.currentUser ? auth.currentUser.uid : ""; },
+      getRoom: function(code){ return F.getDoc(F.doc(db, "rooms", code)).then(function(d){ return d.exists() ? d.data() : null; }); },
+      setRoom: function(code, data){ return F.setDoc(F.doc(db, "rooms", code), data, { merge: true }); },
+      putScore: function(code, id, data){ return F.setDoc(F.doc(db, "rooms", code, "scores", id), data); },
+      putSig: function(code, id, data){ return F.setDoc(F.doc(db, "rooms", code, "sigs", id), data); },
+      getSig: function(code, id){ return F.getDoc(F.doc(db, "rooms", code, "sigs", id)).then(function(d){ return d.exists() ? d.data() : null; }); },
+      watchRoom: function(code, cb, onErr){ return F.onSnapshot(F.doc(db, "rooms", code), { includeMetadataChanges: true }, function(d){ cb(d.exists() ? d.data() : null, d.metadata.fromCache); }, onErr); },
+      watchScores: function(code, cb, onErr){ return F.onSnapshot(F.collection(db, "rooms", code, "scores"), function(q){ cb(q.docChanges().filter(function(c){ return c.type !== "removed"; }).map(function(c){ return c.doc.data(); })); }, onErr); },
+      online: function(on){ return on ? F.enableNetwork(db) : F.disableNetwork(db); }
+    };
+    SYNCRT.t = t; return t;
+  });
+}
+
+/* ---------- start / stop ---------- */
+function syncStart(){
+  if(!SYNC.on || !SYNC.code || SYNCRT.busy) return Promise.resolve();
+  SYNCRT.busy = true; syncSetStatus("connecting");
+  return syncTransport().then(function(t){
+    return t.signIn().then(function(){
+      syncStop(true);
+      SYNCRT.unsub.push(t.watchRoom(SYNC.code, syncOnRoom, syncOnErr));
+      if(S.role !== "ro") SYNCRT.unsub.push(t.watchScores(SYNC.code, syncOnScores, syncOnErr));
+      SYNCRT.busy = false; syncFlush(); if(SYNC.host) syncPushPack(true);
+    });
+  }).catch(function(e){ SYNCRT.busy = false; syncSetStatus(navigator.onLine === false ? "offline" : "error", navigator.onLine === false ? "No signal – will connect when back online." : "Live sync could not start: " + (e && e.message || e)); });
+}
+function syncStop(keepStatus){ SYNCRT.unsub.forEach(function(u){ try{ u(); }catch(e){} }); SYNCRT.unsub = []; if(!keepStatus) syncSetStatus("off"); }
+function syncOnErr(e){ syncSetStatus("error", "Live sync: " + (e && e.message || e)); }
+function syncOnRoom(room, fromCache){
+  syncSetStatus(fromCache || navigator.onLine === false ? "offline" : "connected");
+  if(!room || SYNC.host || S.role !== "ro") return;
+  if(room.packHash && room.packHash === SYNC.packHash) return;
+  try{ var p = JSON.parse(room.pack); if(p.matchId !== S.matchId) return; var assigned = S.ro && S.ro.assigned; applyStagePack(p, true); if(assigned) S.ro.assigned = assigned; S.ro.live = SYNC.code; saveState(); SYNC.packHash = room.packHash; syncSave(); render(); }catch(e){ syncOnErr(e); }
+}
+/* main phone: other phones' score docs → a scores pack per phone → the normal merge (conflicts flagged, never overwritten) */
+function syncOnScores(docs){
+  if(S.role === "ro") return Promise.resolve();
+  var byDev = {}, jobs = [];
+  docs.forEach(function(d){ if(!d || d.deviceId === S.device.id) return; var sc; try{ sc = JSON.parse(d.score); }catch(e){ return; }
+    var seenKey = d.deviceId + "~" + sc.key; if(SYNCRT.seen[seenKey] === d.score) return; SYNCRT.seen[seenKey] = d.score;
+    (byDev[d.deviceId] = byDev[d.deviceId] || { name: d.deviceName || "?", scores: [], sigKeys: [] }).scores.push(sc); if(sc.sig) byDev[d.deviceId].sigKeys.push(sc.key + "#" + sc.rev); });
+  Object.keys(byDev).forEach(function(dev){ var g = byDev[dev];
+    jobs.push(syncFetchSigs(g.sigKeys).then(function(sigs){
+      var p = { app: SS_APP, kind: "scorespack", version: SS_SCHEMA, matchId: S.matchId, from: { id: dev, name: g.name }, packId: "live-" + SYNC.code, scores: g.scores, sigs: sigs };
+      return mergeScoresPack(p, { live: true });
+    }).then(function(r){ if(r && (r.added || r.conflicts)){ render(); toast("Live sync – " + g.name + ": " + r.added + " new" + (r.conflicts ? ", " + r.conflicts + " conflict(s)" : "")); } }).catch(function(e){ syncOnErr(e); }));
+  });
+  return Promise.all(jobs);
+}
+function syncFetchSigs(keys){
+  var out = {}; if(!keys.length) return Promise.resolve(out);
+  return syncTransport().then(function(t){ return Promise.all(keys.map(function(k){ return t.getSig(SYNC.code, encodeURIComponent(k)).then(function(d){ if(d && d.url) out[k] = d.url; }).catch(function(){}); })); }).then(function(){ return out; });
+}
+/* push own pending scores (+ signatures). setDoc resolves when the server has it; Firestore queues offline writes itself, and SYNC.acked survives restarts. */
+function syncFlush(){
+  if(!SYNC.on || !SYNC.code) return Promise.resolve();
+  var keys = syncPending(); syncPaint(); if(!keys.length) return Promise.resolve();
+  return syncTransport().then(function(t){
+    return Promise.all(keys.map(function(k){
+      var sc = S.scores[k], rev = sc.rev || 1, sk = k + "#" + rev, body = JSON.stringify(sc);
+      if(body.length > 60000) return syncOnErr(new Error("score " + k + " too large to sync"));
+      var sigJob = !sc.sig || SYNC.sigAcked[sk] ? Promise.resolve() : sigGet(sk).then(function(url){
+        if(!url) return; if(url.length > SYNC_SIG_MAX){ SYNC.sigAcked[sk] = "too-big"; return; }
+        return t.putSig(SYNC.code, encodeURIComponent(sk), { url: url, deviceId: S.device.id, uid: t.uid() }).then(function(){ SYNC.sigAcked[sk] = 1; syncSave(); });
+      });
+      return sigJob.then(function(){ return t.putScore(SYNC.code, syncDocId(k), { score: body, key: k, rev: rev, deviceId: S.device.id, deviceName: S.device.name || "?", uid: t.uid(), at: nowISO() }); })
+        .then(function(){ if(S.scores[k] && (SYNC.acked[k] || 0) < rev){ SYNC.acked[k] = rev; syncSave(); } syncPaint(); });
+    }));
+  }).catch(function(e){ syncPaint(); });
+}
+function syncPackObj(){ var p = makeStagePack(S.stages.map(function(s){ return s.id; }), ""); p.packId = "live-" + SYNC.code; return p; }
+function syncPushPack(force){
+  if(!SYNC.on || !SYNC.host || S.role === "ro") return Promise.resolve();
+  var txt = JSON.stringify(syncPackObj()), h = hashStr(JSON.stringify([S.match, S.stages, S.shooters]));
+  if(!force && h === SYNC.packHash) return Promise.resolve();
+  if(txt.length > SYNC_PACK_MAX){ syncOnErr(new Error("the match is too large for a live sync room (" + Math.round(txt.length / 1024) + " KB) – use stage packs")); return Promise.resolve(); }
+  return syncTransport().then(function(t){ return t.setRoom(SYNC.code, { code: SYNC.code, matchId: S.matchId, matchName: S.match.name, pack: txt, packHash: h, host: S.device.name || "Main", updatedAt: nowISO() }); }).then(function(){ SYNC.packHash = h; syncSave(); });
+}
+/* called after every saveState: queue changes (debounced) */
+function syncAfterSave(){ if(!SYNC.on) return; clearTimeout(SYNCRT.packTimer); SYNCRT.packTimer = setTimeout(function(){ syncFlush(); syncPushPack(false); }, 400); }
+
+/* ---------- create / join / leave ---------- */
+function syncCreate(){
+  if(S.role === "ro") return Promise.reject(new Error("Only the main phone can create a live sync room."));
+  if(!S.stages.length) return Promise.reject(new Error("Import the stages first."));
+  var code = syncNewCode();
+  return syncTransport().then(function(t){ return t.signIn().then(function(uid){ return t.getRoom(code).then(function(ex){ if(ex) throw new Error("Room code clash – try again.");
+    var txt = JSON.stringify(syncPackObj()); if(txt.length > SYNC_PACK_MAX) throw new Error("The match is too large for a live sync room – use stage packs.");
+    var h = hashStr(JSON.stringify([S.match, S.stages, S.shooters]));
+    return t.setRoom(code, { code: code, matchId: S.matchId, matchName: S.match.name, pack: txt, packHash: h, host: S.device.name || "Main", createdBy: uid, createdAt: nowISO(), updatedAt: nowISO() }).then(function(){
+      Object.assign(SYNC, { on: true, code: code, host: true, acked: {}, sigAcked: {}, packHash: h }); syncSave(); return syncStart().then(function(){ return code; }); }); }); }); });
+}
+function syncJoin(code, assigned){
+  code = syncCleanCode(code); if(!code) return Promise.reject(new Error("A match code has 6 letters/digits."));
+  return syncTransport().then(function(t){ return t.signIn().then(function(){ return t.getRoom(code); }).then(function(room){
+    if(!room) throw new Error("No live sync room " + code + " (check the code and the signal).");
+    var p = JSON.parse(room.pack), res = applyStagePack(p, true);
+    if(assigned && assigned.length) S.ro.assigned = assigned.slice();
+    S.ro.live = code; saveState();
+    Object.assign(SYNC, { on: true, code: code, host: false, acked: {}, sigAcked: {}, packHash: room.packHash || "" }); syncSave();
+    return syncStart().then(function(){ return { room: room, res: res }; });
+  }); });
+}
+function syncPeek(code){ code = syncCleanCode(code); if(!code) return Promise.reject(new Error("A match code has 6 letters/digits.")); return syncTransport().then(function(t){ return t.signIn().then(function(){ return t.getRoom(code); }); }).then(function(r){ if(!r) throw new Error("No live sync room " + code + "."); return JSON.parse(r.pack); }); }
+function syncLeave(){ syncStop(); var n = syncPending().length; Object.assign(SYNC, { on: false, code: "", host: false, acked: {}, sigAcked: {}, packHash: "" }); syncSave(); if(S.ro) delete S.ro.live; saveState(); syncPaint(); return n; }
+
+/* ---------- Match tab card ---------- */
+function syncBoxInner(){
+  if(!syncConfigured()) return '<p class="small muted">Live sync is not set up yet (no Firebase project). Use stage packs and scores packs (file or QR).</p>';
+  if(!SYNC.on) return '<p class="small muted">Optional. Needs signal; scoring always works offline and catches up later. Stage and scores packs keep working.</p>' +
+    (S.role !== "ro" ? '<button type="button" class="wide primary" id="syncCreateB"' + (S.stages.length ? "" : " disabled") + '>Create a live match room</button>' : "") +
+    '<button type="button" class="wide" style="margin-top:8px" id="syncJoinB">Join a room with a match code…</button>';
+  var n = syncPending().length;
+  return '<div><b>Room ' + esc(SYNC.code) + '</b> · ' + (SYNC.host ? "main phone (merges scores)" : "RO phone (sends scores)") + '</div>' +
+    '<div class="small" style="margin:6px 0">Status: <b>' + esc(SYNCRT.status === "connected" ? "connected" : SYNCRT.status === "connecting" ? "connecting…" : SYNCRT.status === "error" ? "error" : "offline – will catch up") + '</b> · ' + n + ' pending' + (SYNCRT.err ? '<br><span class="muted">' + esc(SYNCRT.err) + '</span>' : "") + '</div>' +
+    (SYNC.host ? '<div class="syncqr" id="syncQR"></div><p class="small muted">RO phones: Match → Live sync → Join, then scan this code or type ' + esc(SYNC.code) + '.</p>' : "") +
+    '<button type="button" class="wide danger" style="margin-top:8px" id="syncLeaveB">Leave room (turn live sync off)</button>';
+}
+function syncCard(){ return '<div class="card"><h3><label class="agree' + (SYNC.on ? " on" : "") + '" style="display:inline"><input type="checkbox" id="syncToggle"' + (SYNC.on ? " checked" : "") + (syncConfigured() ? "" : " disabled") + '> Live sync</label></h3><div id="syncBox">' + syncBoxInner() + '</div></div>'; }
+function syncBind(){
+  var box = $("syncBox"); if(!box) return;
+  box.onclick = function(e){ var b = e.target.closest("button"); if(!b) return;
+    if(b.id === "syncCreateB") needName().then(function(ok){ if(ok) syncCreate().then(function(c){ toast("Live room " + c + " created"); render(); }).catch(function(er){ alertMsg(er.message); }); });
+    if(b.id === "syncJoinB") syncJoinDialog();
+    if(b.id === "syncLeaveB") ask("Leave live room " + SYNC.code + "? Scores stay on this phone" + (syncPending().length ? " (" + syncPending().length + " not yet sent – send a scores pack instead)" : "") + ".", { ok: "Leave", okClass: "danger" }).then(function(ok){ if(ok){ syncLeave(); render(); } });
+  };
+  var tg = $("syncToggle"); if(tg) tg.onchange = function(){ if(this.checked){ this.checked = false; if(S.role !== "ro" && S.stages.length) box.querySelector("#syncCreateB") && box.querySelector("#syncCreateB").focus(); toast("Create or join a room below"); } else { this.checked = true; box.querySelector("#syncLeaveB").click(); } };
+  var q = $("syncQR"); if(q && SYNC.code){ try{ q.innerHTML = qrSVG("SSLIVE|" + SYNC.code); }catch(e){} }
+}
+function syncJoinDialog(pre){
+  needName().then(function(ok){ if(!ok) return;
+    if(Object.keys(S.scores).length && !S.ro) return alertMsg("This phone holds scores for " + S.match.name + ". Export a backup and start a new match before joining a room as an RO phone.");
+    var o = $("overlay");
+    o.innerHTML = '<h2>Join a live match room</h2><label>Match code</label><input id="sjCode" autocapitalize="characters" maxlength="8" placeholder="e.g. K7M2QX" style="text-transform:uppercase" value="' + esc(pre || "") + '"><div class="grid2" style="margin-top:8px"><button type="button" class="primary" id="sjLook">Next</button><button type="button" id="sjScan">Scan QR</button></div><div id="sjStages"></div><button type="button" class="wide" style="margin-top:10px" id="sjClose">Cancel</button>';
+    o.hidden = false; window.scrollTo(0, 0);
+    $("sjClose").onclick = function(){ o.hidden = true; o.innerHTML = ""; };
+    $("sjScan").onclick = function(){ o.hidden = true; startScan(); };
+    $("sjLook").onclick = function(){ var code = $("sjCode").value;
+      syncPeek(code).then(function(p){
+        $("sjStages").innerHTML = '<p><b>' + esc(p.match && p.match.name) + '</b> – ' + p.shooters.length + ' shooters. Stages this phone scores:</p>' + p.stages.map(function(st){ return '<label class="agree"><input type="checkbox" data-sj="' + st.id + '"> Stage ' + st.no + ' – ' + esc(st.title) + '</label>'; }).join("") + '<button type="button" class="primary wide" id="sjGo">Join as RO phone</button>';
+        $("sjGo").onclick = function(){ var ids = Array.prototype.filter.call(o.querySelectorAll("[data-sj]"), function(c){ return c.checked; }).map(function(c){ return c.dataset.sj; }); if(!ids.length) return alertMsg("Tick at least one stage.");
+          syncJoin(code, ids).then(function(){ o.hidden = true; o.innerHTML = ""; toast("Joined live room " + SYNC.code); render(); }).catch(function(er){ alertMsg(er.message); }); };
+      }).catch(function(er){ alertMsg(er.message); });
+    };
+    if(pre) $("sjLook").click();
+  });
+}
+function syncBoot(){
+  syncLoad();
+  window.addEventListener("online", function(){ if(SYNC.on){ if(!SYNCRT.unsub.length) syncStart(); else { syncSetStatus("connected"); syncFlush(); } } });
+  window.addEventListener("offline", function(){ if(SYNC.on) syncSetStatus("offline"); });
+  syncPaint();
+  if(SYNC.on && syncConfigured()) syncStart();
+}
 /* ===================== start-up and events ===================== */
 function onClick(e){
   var b = e.target.closest("button,[data-act]"); if(!b) return;
@@ -2180,12 +2551,13 @@ function boot(){
   $("fileAny").onchange = function(){ var f = this.files && this.files[0], inp = this; if(!f) return; var rd = new FileReader(); rd.onload = function(){ inp.value = ""; importFileText(String(rd.result || ""), f.name); }; rd.readAsText(f); };
   /* resume an unfinished entry after a reload */
   try{ var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); if(d && stageById(d.stage) && shooterById(d.shooter) && d.draft){ U.stage = d.stage; U.shooter = d.shooter; U.draft = d.draft; U.editing = d.editing; U.screen = d.screen === "confirm" ? "confirm" : "entry"; U.tab = "score"; } }catch(e){}
+  syncBoot();
   sigOpen().then(function(){ render(); });
   render();
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later" }).then(function(v){ if(v && v.trim()){ S.device.name = v.trim(); saveState(); render(); } }); }, 300);
   if("serviceWorker" in navigator && location.protocol !== "file:") setupUpdates();
 }
-window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, setS: function(x){ S = x; } };
+window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, sync: { get state(){ return SYNC; }, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; } };
 document.addEventListener("DOMContentLoaded", boot);
 
 /* updates: a new version (new sw.js build hash) installs in the background; the user is told and reloads when ready */

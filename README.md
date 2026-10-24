@@ -41,3 +41,14 @@ data model, migration, hit requirements and SVG renderer (the designer itself is
   opened or brought to the front (and every 30 min), install it in the background, and show "Update available – Reload".
   The running version is kept until Reload is tapped (an unfinished score entry is saved and resumes); the old cache is then deleted.
 - GitHub Pages caches files for ~10 minutes, so a phone may need that long to see a new version.
+
+## Live sync (optional, Firebase)
+- Off by default; the app is unchanged without it. Match tab → **Live sync**: the main phone creates a room (6-character match code + QR),
+  RO phones join with the code/QR and tick their stages. Firebase SDK 10.14.1 (modular ESM from gstatic) loads only when sync is on and is
+  cached by sw.js for offline starts. Config: `src/firebase-config.js` (project spectre-scoring-5ddda).
+- Firestore: `rooms/{CODE}` (stage pack as JSON text, owner-only updates), `rooms/{CODE}/scores/{deviceId}~{key}`, `rooms/{CODE}/sigs/{key#rev}`.
+  Each phone pushes its own scores; the main phone merges others' through mergeScoresPack (identical skipped, different = conflict).
+  RO phones receive stage/shooter updates. Pending = own scores not yet acknowledged (kept across restarts); Firestore persistence queues writes offline.
+- Rules: `firestore.rules` (paste into Firebase console → Firestore → Rules). Tests: `t/test-sync.js` (mock), `t/test-rules.js` and
+  `t/test-sync-emulator.js` (emulators: `npx firebase emulators:exec --project demo-spectre --only firestore,auth "node t/<test>"`, needs Java + /workspace/fbtools).
+- Limits: match pack < 900 KB, score < 60 KB, signature < 700 KB (bigger ones go by pack). Only the room creator merges; RO phones never merge scores.
