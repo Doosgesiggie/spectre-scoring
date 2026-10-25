@@ -1,5 +1,5 @@
 /* Spectre Scoring service worker: caches the whole app for full offline use. Relative URLs, so it works from any sub-path. */
-var CACHE = "spectre-scoring-cc3b2b90c43a";
+var CACHE = "spectre-scoring-dbab2b107c0f";
 var FILES = ["./", "./index.html", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png"];
 self.addEventListener("install", function(e){
   e.waitUntil(caches.open(CACHE).then(function(c){ return c.addAll(FILES.map(function(f){ return new Request(f, { cache: "reload" }); })); }));

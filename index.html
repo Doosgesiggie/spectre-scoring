@@ -176,7 +176,6 @@ details > summary{cursor:pointer;font-weight:700;min-height:44px;display:flex;al
   .printarea .sheet{break-after:page;page-break-after:always}
   .printarea .sheet:last-child{break-after:auto;page-break-after:auto}
 }
-}
 /* RO roles card */
 .rorow{border-top:1px solid var(--border);padding:8px 0}
 .rostages{display:flex;flex-wrap:wrap;gap:6px}
@@ -186,6 +185,8 @@ details > summary{cursor:pointer;font-weight:700;min-height:44px;display:flex;al
 /* club-shoot results pack (print only, A4 landscape) */
 @page pkland{size:A4 landscape;margin:9mm 10mm}
 @media print{
+  /* keep the navy headers, podium and row shading: browsers drop backgrounds in print unless told otherwise */
+  .printarea .pkpage,.printarea .pkpage *{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
   .printarea .pkpage{page:pkland;break-after:page;position:relative;min-height:188mm;padding-bottom:9mm;font-family:"Barlow","Roboto",Arial,sans-serif;font-size:8.6pt;color:#111}
   .printarea .pkpage:last-child{break-after:auto}
   .pkhead{display:flex;justify-content:space-between;align-items:flex-end;background:#14284b;color:#fff;padding:2.5mm 4mm 2mm;border-left:2.2mm solid #d6a92a;margin-bottom:3mm}
