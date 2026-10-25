@@ -35,6 +35,39 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 .paper{background:#fff;width:210mm;max-width:100%;padding:10mm;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.15);overflow-x:auto}
 #pdfStage{position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:38px}
 .err{color:#a00}
+/* results pack (same look as the app pack) */
+#packStage{position:fixed;left:-20000px;top:0;width:1123px;background:#fff}
+#packStage .pkpage{width:1123px;height:794px;padding:34px 38px 44px;position:relative;box-sizing:border-box;font-family:"Barlow","Roboto",Arial,sans-serif;font-size:8.6pt;color:#111;background:#fff;overflow:hidden}
+#packStage table{border-collapse:collapse;width:100%}
+#packStage .pkfoot{left:38px;right:38px;bottom:16px}
+.packbtn{display:block;width:100%;margin:0;padding:14px 16px;border-radius:10px;border:0;background:#d6a92a;color:#14284b;font-weight:800;font-size:1.05em;text-align:center;cursor:pointer}
+.packbtn small{display:block;font-weight:500;font-size:.78em;margin-top:2px}
+      .pkhead{display:flex;justify-content:space-between;align-items:flex-end;background:#14284b;color:#fff;padding:2.5mm 4mm 2mm;border-left:2.2mm solid #d6a92a;margin-bottom:3mm}
+  .pkt{font-family:var(--cond);font-weight:900;font-size:16pt;text-transform:uppercase;letter-spacing:.02em}
+  .pks{font-size:7.6pt;opacity:.9}
+  .pkr{text-align:right;font-size:7.6pt}.pkbrand{color:#d6a92a;font-family:var(--cond);font-weight:900;font-size:9pt;margin-bottom:1.5mm}
+  #packStage table.pkinfo{border:0.8pt solid #14284b;margin-bottom:3mm;font-size:8pt}
+  #packStage .pkinfo th{background:#e9edf3;font-weight:700;width:auto;white-space:nowrap}
+  #packStage .pkinfo th,#packStage .pkinfo td{border:0.5pt solid #b7c0cf;padding:1mm 1.6mm}
+  .pkpod{display:flex;gap:6mm;margin:0 0 3mm}
+  .pp{flex:1;text-align:center;padding:1.5mm;border:0.8pt solid #999}
+  .pp.p1{background:#f7e7b1}.pp.p2{background:#e4e8ee}.pp.p3{background:#f3e0cc}
+  .ppt{font-family:var(--cond);font-weight:900;font-size:13pt;color:#14284b}.ppn{font-weight:700;font-size:10pt}.ppx{font-size:7.5pt;color:#555}
+  .pkh3{font-family:var(--cond);font-size:10.5pt;margin:2mm 0 1mm;color:#14284b;text-transform:none}
+  #packStage table.pktab{font-size:8pt}
+  #packStage .pktab th{background:#14284b;color:#fff;text-align:center;border:0.4pt solid #14284b;padding:1mm 1.2mm;font-size:7.6pt}
+  #packStage .pktab td{text-align:center;border:0;border-bottom:0.4pt solid #d5dbe5;padding:0.9mm 1.2mm}
+  #packStage .pktab .l{text-align:left}#packStage .pktab td.wrap{white-space:normal}
+  #packStage .pktab tr:nth-child(even) td{background:#f4f6f9}
+  #packStage .pktab tr.pl1 td{background:#f7e7b1}#packStage .pktab tr.pl3 td{background:#f3e0cc}
+  #packStage .pktab tr.pkdnf td{background:#f7e7b1}
+  .pktab .mul{font-weight:400;font-size:6.8pt;color:#d6a92a}
+  .pkwhy{font-size:7pt;color:#555}
+  .pkfn{font-size:7.4pt;margin-top:2mm;line-height:1.35}
+  .pkul{margin:0 0 2mm;padding-left:5mm;font-size:8pt}
+  .pkfoot{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;border-top:0.8pt solid #d6a92a;padding-top:1mm;font-size:6.8pt;color:#555}
+  .pkfoot span:first-child{font-style:italic}
+
 .anav{display:flex;gap:4px;background:#0e1d38;padding:0 12px}
 .anav a{color:#fff;text-decoration:none;padding:10px 16px;font-weight:700;border-bottom:3px solid transparent}
 .anav a.on{border-bottom-color:#d6a92a}
@@ -115,7 +148,7 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 </ul>
 </div></template>
 
-<div id="pdfStage" aria-hidden="true"></div>
+<div id="pdfStage" aria-hidden="true"></div><div id="packStage" aria-hidden="true"></div>
 <script>
 /* ===================== FIREBASE CONFIG – FILL IN HERE =====================
    Live sync is optional. Filled in 24 Oct 2026 for project spectre-scoring-5ddda (Firestore africa-south1). If they are ever cleared/placeholdered
@@ -170,6 +203,87 @@ function sheetRender(d, sigs, printed){
 
 </script>
 <script>
+/* ===== archive results pack: Gunny's club-shoot pack (A4 landscape) rebuilt from the published archive data =====
+   Same pages as the app's Results pack (s-pack.js): overall, one page per stage, score check. Score notes are footnotes.
+   Uses only public archive fields (names, numbers, hits, times, scores, notes). */
+var APK_D = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"], APK_M = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+function apkDate(iso, short){ var d = new Date(String(iso || "") + "T12:00:00"); if(isNaN(d)) return String(iso || ""); return short ? APK_D[d.getDay()].slice(0,3) + " " + d.getDate() + " " + APK_M[d.getMonth()].slice(0,3) + " " + d.getFullYear() : APK_D[d.getDay()] + " " + d.getDate() + " " + APK_M[d.getMonth()] + " " + d.getFullYear(); }
+function apkNum(v){ var n = parseFloat(String(v == null ? "" : v).replace(/[^\d.\-]/g, "")); return isNaN(n) ? null : n; }
+function apkF2(n){ return n == null ? "" : (Math.round(n * 100) / 100).toFixed(2); }
+function apkPages(m){
+  var E = function(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]; }); };
+  var mt = m.match || {}, sheets = m.sheets || [], pages = [];
+  /* stages from the rows (or the published stage list when present) */
+  var stMap = {};
+  sheets.forEach(function(s){ (s.rows || []).forEach(function(r){ if(!stMap[r.no]) stMap[r.no] = { no: r.no, title: r.title }; }); });
+  (m.stages || []).forEach(function(s){ stMap[s.no] = Object.assign(stMap[s.no] || {}, s); });
+  var stages = Object.keys(stMap).map(function(k){ return stMap[k]; }).sort(function(a, b){ return a.no - b.no; });
+  var isNum = function(v){ return typeof v === "number"; };
+  var cnt = function(r){ return isNum(r.hz) ? r.hz + r.pz1 + r.pz2 + r.miss : null; };
+  stages.forEach(function(st){ if(st.rounds) return; var f = {}; sheets.forEach(function(s){ var r = rowOf(s, st); var c = r && cnt(r); if(c) f[c] = (f[c] || 0) + 1; }); var best = 0; Object.keys(f).forEach(function(k){ if(!best || f[k] > f[best] || (f[k] === f[best] && +k > +best)) best = k; }); st.rounds = +best || 0; st.inferred = true; });
+  function rowOf(s, st){ return (s.rows || []).filter(function(r){ return r.no === st.no; })[0]; }
+  /* footnotes from the score notes */
+  var NL = [];
+  sheets.forEach(function(s){ (s.rows || []).forEach(function(r){ if(r.note) NL.push({ st: r.no, sh: s.sh.id, name: s.sh.name, text: r.note, score: r.score }); }); });
+  if(!NL.length) (m.notes || []).forEach(function(n){ var s = sheets.filter(function(x){ return x.sh.name === n.shooter; })[0]; NL.push({ st: n.stage, sh: s ? s.sh.id : "", name: n.shooter, text: n.text, score: s && rowOf(s, { no: n.stage }) ? rowOf(s, { no: n.stage }).score : "" }); });
+  NL.sort(function(a, b){ return a.st - b.st || String(a.name).localeCompare(b.name); });
+  var mark = function(stNo, shId){ for(var i = 0; i < NL.length; i++) if(NL[i].st === stNo && NL[i].sh === shId) return '<sup>' + (i + 1) + '</sup>'; return ""; };
+  var head = function(title, sub){ return '<div class="pkhead"><div><div class="pkt">' + E(title) + '</div><div class="pks">' + E(sub) + '</div></div><div class="pkr"><div class="pkbrand">SPECTRE TACTICAL SHOOTING</div><div>' + E(mt.venue || "") + ' | ' + E(apkDate(mt.date, true)) + '</div></div></div>'; };
+  var why = function(s){ return String(s.ov && s.ov.place || ""); };
+  var ranked = sheets.filter(function(s){ return s.ov && /^\d+$/.test(String(s.ov.place)); }).sort(function(a, b){ return +a.ov.place - +b.ov.place || a.sh.name.localeCompare(b.sh.name); });
+  var other = sheets.filter(function(s){ return ranked.indexOf(s) < 0; });
+  var lead = ranked.length ? apkNum(ranked[0].ov.total) : 0, rounds = stages.reduce(function(a, s){ return a + s.rounds; }, 0), scorers = {};
+  sheets.forEach(function(s){ (s.rows || []).forEach(function(r){ if(r.by) scorers[r.by] = 1; }); });
+  var cell = function(s, st){ var r = rowOf(s, st); return r ? E(String(r.score).replace(/ s$/, "")) + mark(st.no, s.sh.id) : "–"; };
+  var p = head("Club shoot results", (mt.name || "") + " | Overall results | Negative scoring model: lowest total wins");
+  p += '<table class="pkinfo"><tr><th>Match</th><td>' + E(mt.name) + '</td><th>Date</th><td>' + E(apkDate(mt.date)) + '</td><th>Venue</th><td>' + E(mt.venue) + '</td></tr><tr><th>Match Director</th><td>' + E(mt.md) + '</td><th>Scorer(s)</th><td>' + E(Object.keys(scorers).join(", ") || "–") + '</td><th>Shooters / stages</th><td>' + sheets.length + ' shooters | ' + stages.length + ' stages (' + rounds + ' rounds)</td></tr></table>';
+  p += '<div class="pkpod">' + ["1ST","2ND","3RD"].map(function(t, i){ var r = ranked[i]; return '<div class="pp p' + (i + 1) + '"><div class="ppt">' + t + '</div><div class="ppn">' + (r ? E(r.sh.name) : "–") + '</div><div class="ppx">' + (r ? "Total " + apkF2(apkNum(r.ov.total)) + " s" : "") + '</div></div>'; }).join("") + '</div>';
+  p += '<h3 class="pkh3">Overall results (sum of Stage ' + (stages.length ? stages[0].no + "-" + stages[stages.length - 1].no : "") + ' scores, seconds)</h3><table class="pktab"><tr><th>Rank</th><th class="l">Shooter</th>' + stages.map(function(s){ return '<th>Stage ' + s.no + '</th>'; }).join("") + '<th>Total (s)</th><th>Gap to 1st</th></tr>';
+  ranked.forEach(function(s){ var pl = +s.ov.place, t = apkNum(s.ov.total); p += '<tr class="' + (pl <= 3 ? "pl" + pl : "") + '"><td><b>' + pl + '</b></td><td class="l"><b>' + E(s.sh.name) + '</b></td>' + stages.map(function(st){ return '<td>' + cell(s, st) + '</td>'; }).join("") + '<td><b>' + apkF2(t) + '</b></td><td>' + (t === lead ? "-" : "+" + apkF2(t - lead)) + '</td></tr>'; });
+  if(other.length){ p += '<tr class="pkdnf"><td colspan="' + (stages.length + 4) + '" class="l"><b>Not ranked overall</b></td></tr>';
+    other.forEach(function(s){ var w = why(s); p += '<tr><td>' + (/DQ/.test(w) ? "DQ" : /DNF/.test(w) ? "DNF" : "–") + '</td><td class="l">' + E(s.sh.name) + ' <span class="pkwhy">(' + E(w.replace(/^Not ranked\s*[–-]\s*/, "")) + ')</span></td>' + stages.map(function(st){ return '<td>' + cell(s, st) + '</td>'; }).join("") + '<td>-</td><td></td></tr>'; }); }
+  p += '</table>';
+  var fn = NL.map(function(x, i){ return '<sup>' + (i + 1) + '</sup> Stage ' + x.st + ', ' + E(x.name) + ': ' + E(x.text); });
+  if(other.some(function(s){ return /DNF/.test(why(s)); })) fn.push("A shooter who did not finish a stage is not ranked overall; their finished stages stand and are ranked on those stage pages.");
+  if(other.some(function(s){ return /DQ/.test(why(s)); })) fn.push("A disqualified shooter is removed from the match results (§4.6).");
+  if(mt.note) fn.push("<b>Match note:</b> " + E(mt.note));
+  if(fn.length) p += '<div class="pkfn">' + fn.join(" ") + '</div>';
+  pages.push(p);
+  var qs = [];
+  stages.forEach(function(st){
+    var tot = st.rounds, list = sheets.map(function(s){ return { s: s, r: rowOf(s, st) }; }).filter(function(x){ return x.r; });
+    var rk = list.filter(function(x){ return /^\d+$/.test(String(x.r.place)); }).sort(function(a, b){ return +a.r.place - +b.r.place || a.s.sh.name.localeCompare(b.s.sh.name); });
+    var oth = list.filter(function(x){ return rk.indexOf(x) < 0; });
+    var anyStand = list.some(function(x){ return isNum(x.r.standing) && x.r.standing > 0; }), ok = 0, scored = 0, bad = [];
+    var q = head("Stage " + st.no + " | " + (st.title || ""), "Stage results | Stage score = time + penalty seconds | Lowest wins | " + tot + " rounds");
+    q += '<table class="pkinfo"><tr><th>Stage</th><td>' + E(tot + " rds" + (st.firearms && st.firearms.length ? " " + st.firearms.join(" / ") : "") + (st.limited ? ", limited" : "") + ". " + (st.sub || "")) + '</td></tr></table>';
+    var cols = [["HZ","+0"],["PZI","x1"],["PZII","x3"],["Misses","x7"]].concat(anyStand ? [["Steel stand.","x7"]] : []).concat([["Proced.","x3"],["No-shoot","x7"],["Rounds counted",""]]);
+    q += '<table class="pktab pkst"><tr><th>Rank</th><th class="l">Shooter</th><th>Time (s)</th>' + cols.map(function(c){ return '<th>' + c[0] + (c[1] ? '<br><span class="mul">' + c[1] + '</span>' : "") + '</th>'; }).join("") + '<th>Penalty (s)</th><th>Stage score (s)</th></tr>';
+    var nz = function(v){ return v ? v : ""; };
+    var line = function(x, rank){ var r = x.r, nm = x.s.sh.name;
+      if(!isNum(r.hz)){ if(/DNF/.test(r.score)) qs.push("Stage " + st.no + ": " + nm + " did not finish (DNF)."); return '<tr><td>' + E(rank) + '</td><td class="l">' + E(nm) + '</td><td>' + (apkNum(r.time) != null ? apkF2(apkNum(r.time)) : "") + '</td>' + cols.map(function(){ return "<td></td>"; }).join("") + '<td></td><td><b>' + E(r.score) + '</b>' + mark(st.no, x.s.sh.id) + '</td></tr>'; }
+      var c = cnt(r), tm = apkNum(r.time), sc = apkNum(r.score), pen = r.pz1 + r.pz2 * 3 + r.miss * 7 + r.pen * 3 + r.ns * 7;
+      scored++; if(c === tot) ok++; else { bad.push(nm + " " + c + "/" + tot); qs.push("Stage " + st.no + ": " + nm + " has " + c + " rounds counted, expected " + tot + "."); }
+      if(tm != null && sc != null && Math.abs(tm + pen - sc) > 0.005 && !/not engaged|fte/i.test(r.note || "")) qs.push("Stage " + st.no + ": " + nm + " stage score " + apkF2(sc) + " differs from time + penalties (" + apkF2(tm + pen) + ").");
+      var vals = [r.hz, nz(r.pz1), nz(r.pz2), nz(r.miss)].concat(anyStand ? [nz(r.standing)] : []).concat([nz(r.pen), nz(r.ns), c + "/" + tot]);
+      return '<tr class="' + (+rank <= 3 ? "pl" + rank : "") + '"><td><b>' + E(rank) + '</b></td><td class="l"><b>' + E(nm) + '</b></td><td>' + apkF2(tm) + '</td>' + vals.map(function(v){ return '<td>' + E(v) + '</td>'; }).join("") + '<td>' + E(sc != null && tm != null ? String(Math.round((sc - tm) * 100) / 100) : "") + '</td><td><b>' + apkF2(sc) + '</b>' + mark(st.no, x.s.sh.id) + '</td></tr>'; };
+    rk.forEach(function(x){ q += line(x, x.r.place); }); oth.forEach(function(x){ q += line(x, /DQ/.test(x.r.place) ? "DQ" : /DNF/.test(x.r.place) ? "DNF" : "–"); });
+    q += '</table>';
+    var notes = NL.map(function(x, i){ return x.st === st.no ? '<sup>' + (i + 1) + '</sup> ' + E(x.name) + ': ' + E(x.text) : ""; }).filter(Boolean);
+    q += '<div class="pkfn">Rounds counted = HZ + PZI + PZII + Misses (misses include steel left standing); expected ' + tot + (st.inferred ? " (taken from the most common tally – the stage round count was not in the published data)" : "") + '. ' + (bad.length ? "Check: " + E(bad.join(", ")) + ". " : "All " + ok + " of " + scored + " scored shooters total exactly " + tot + ". ") + 'Stage score = time + penalty seconds. Ties share a rank.' + (notes.length ? "<br>" + notes.join(" ") : "") + '</div>';
+    pages.push(q);
+  });
+  var c = head("Score check", "How the scores were checked | Notes and corrections");
+  c += '<h3 class="pkh3">Method</h3><ul class="pkul"><li>Every score was entered on a scoring phone and stamped with the Range Officer’s name (shown as “Scored by” on each shooter’s score sheet).</li><li>Penalty seconds = (PZI x1) + (PZII x3) + (Misses x7, not-engaged targets x14) + (Steel standing x7) + (Procedurals x3) + (No-shoot x7). These values are from the rulebook (§4.2.2 p.61-62, §4.2.2.1 p.62, §4.2.4 p.64, §4.4 p.68-69).</li><li>Stage score = time + penalty seconds. All rounds count.</li><li>The rounds counted per shooter were compared with each stage’s round count: ' + stages.map(function(s){ return s.rounds; }).join(", ") + '.</li><li>Overall total = sum of stage scores, lowest wins; ties go to most HZ hits. A shooter who did not finish a stage is not ranked overall. A disqualified shooter is removed from the match results (§4.6).</li><li>This pack was rebuilt from the published archive; only the arithmetic can be checked, not a hand-written sheet.</li></ul>';
+  c += '<h3 class="pkh3">Notes and corrections</h3>' + (NL.length ? '<table class="pktab"><tr><th>#</th><th class="l">Stage</th><th class="l">Shooter</th><th>Stage score (s)</th><th class="l">Note</th></tr>' + NL.map(function(x, i){ return '<tr><td>' + (i + 1) + '</td><td class="l">Stage ' + x.st + '</td><td class="l">' + E(x.name) + '</td><td>' + E(String(x.score || "–").replace(/ s$/, "")) + '</td><td class="l wrap">' + E(x.text) + '</td></tr>'; }).join("") + '</table>' : '<p>No notes or corrections were recorded.</p>');
+  c += '<h3 class="pkh3">Queries for the match director</h3><ul class="pkul">' + (qs.length ? qs.map(function(t){ return '<li>' + E(t) + '</li>'; }).join("") : '<li>None: every scored shooter’s tally adds up to the stage round count and every stage score matches the recalculation.</li>') + '</ul>';
+  pages.push(c);
+  var footL = "Scored on the Spectre Scoring app (RO name and time stamped on every score); rebuilt from the published archive " + String(m.publishedAt || "").slice(0, 10) + ".";
+  return pages.map(function(b, i){ return '<div class="pkpage">' + b + '<div class="pkfoot"><span>' + E(footL) + '</span><span>' + E(mt.name) + ' - Results | Page ' + (i + 1) + ' of ' + pages.length + '</span></div></div>'; });
+}
+
+</script>
+<script>
 (function(){
   var RULES_HTML = document.getElementById("rulesTpl").innerHTML;
   var F = null, db = null, CUR = null, app = document.getElementById("app"), e = shEsc;
@@ -208,7 +322,7 @@ function sheetRender(d, sigs, printed){
   function showMatch(id, q){
     app.innerHTML = '<div class="card">Loading…</div>';
     loadMatch(id).then(function(m){
-      app.innerHTML = head(m) + '<div class="card"><label for="q"><b>Find your name</b></label><input type="search" id="q" placeholder="Type part of your name" value="' + e(q || "") + '" autocomplete="off"><ul class="shooters" id="shList"></ul></div>' +
+      app.innerHTML = head(m) + '<div class="card noprint"><button type="button" class="packbtn" id="packPdf">&#11015; Download results pack (PDF)<small>Overall, every stage and the score check &middot; A4 landscape, colour</small></button></div><div class="card"><label for="q"><b>Find your name</b></label><input type="search" id="q" placeholder="Type part of your name" value="' + e(q || "") + '" autocomplete="off"><ul class="shooters" id="shList"></ul></div>' +
         '<div class="card row"><a class="btn" href="#m=' + encodeURIComponent(id) + '&r=0">Full results</a><button type="button" id="allPdf">Download all score sheets (PDF)</button></div>';
       var paint = function(){ var t = document.getElementById("q").value.trim().toLowerCase();
         var rows = m.sheets.filter(function(s){ return !t || (s.sh.name + " " + s.sh.no).toLowerCase().indexOf(t) >= 0; });
@@ -216,6 +330,7 @@ function sheetRender(d, sigs, printed){
       document.getElementById("q").oninput = paint; paint();
       document.getElementById("shList").onclick = function(ev){ var b = ev.target.closest("[data-pdf]"); if(b) pdfSheets(m, m.sheets.filter(function(s){ return s.sh.id === b.dataset.pdf; }), b); };
       document.getElementById("allPdf").onclick = function(){ pdfSheets(m, m.sheets, this); };
+      packWire(m);
     }).catch(fail);
   }
   function showSheet(id, sid){
@@ -231,8 +346,9 @@ function sheetRender(d, sigs, printed){
     return h + notesHTML(m); }
   function showResults(id, i){
     loadMatch(id).then(function(m){ i = Math.max(0, Math.min(+i || 0, (m.tables || []).length - 1));
-      app.innerHTML = head(m) + '<div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(id) + '">Score sheets</a><button type="button" class="primary" id="resPdf">Download full results (PDF)</button></div><div class="card" id="resView">' + resultsHTML(m, i) + '</div>';
+      app.innerHTML = head(m) + '<div class="card noprint"><button type="button" class="packbtn" id="packPdf">&#11015; Download results pack (PDF)<small>Overall, every stage and the score check &middot; A4 landscape, colour</small></button></div><div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(id) + '">Score sheets</a><button type="button" class="primary" id="resPdf">Download full results (PDF)</button></div><div class="card" id="resView">' + resultsHTML(m, i) + '</div>';
       document.getElementById("resPdf").onclick = function(){ pdfResults(m, this); };
+      packWire(m);
     }).catch(fail);
   }
   /* ---------- PDF (in the browser: html2canvas + jsPDF, loaded on first use) ---------- */
@@ -256,7 +372,20 @@ function sheetRender(d, sigs, printed){
   }
   function pdfSheets(m, list, btn){ return pdfBlocks(list.map(function(s){ return sheetRender(sheetObj(m, s), null, "published " + String(m.publishedAt || "").slice(0, 10)); }), slug(m.match.name) + "-" + (list.length === 1 ? slug(list[0].sh.name) : "score-sheets") + ".pdf", btn); }
   function pdfResults(m, btn){ return pdfBlocks((m.tables || []).map(function(t, i){ return '<div class="sheet"><div class="shhead"><div><h1>' + e(m.match.name) + '</h1><div>' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + '</div></div><div class="shtag">Results</div></div>' + resultsHTML(m, i).replace(/<div class="restabs noprint">[\s\S]*?<\/div>/, "") + '</div>'; }), slug(m.match.name) + "-results.pdf", btn); }
-  window.SSA = { pdfSheets: pdfSheets, pdfResults: pdfResults, get cur(){ return CUR; } };
+  /* Gunny's results pack: one A4 landscape PDF page per pack page (archive-pack.js builds the HTML) */
+  function packWire(m){ var b = document.getElementById("packPdf"); if(!b) return; if(m.neg === false){ b.parentNode.style.display = "none"; return; } b.onclick = function(){ pdfPack(m, b); }; }
+  function pdfPack(m, btn){
+    var old = btn && btn.innerHTML; if(btn){ btn.disabled = true; btn.textContent = "Making results pack…"; }
+    var stage = document.getElementById("packStage"), name = slug(m.match.name) + "-" + (m.match.date || "") + "-results-pack.pdf";
+    return pdfLib().then(function(){
+      var pdf = new window.jspdf.jsPDF({ unit: "mm", format: "a4", orientation: "landscape" }), pages = apkPages(m);
+      return pages.reduce(function(p, html, i){ return p.then(function(){ stage.innerHTML = html;
+        return window.html2canvas(stage.firstChild, { scale: 2, backgroundColor: "#ffffff", logging: false, width: 1123, height: 794 }).then(function(c){
+          if(i) pdf.addPage("a4", "landscape"); pdf.addImage(c.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 297, 210); }); }); }, Promise.resolve()).then(function(){
+        stage.innerHTML = ""; pdf.setProperties({ title: m.match.name + " – results pack" }); window.__lastPdf = { name: name, pages: pdf.getNumberOfPages() }; pdf.save(name); });
+    }).catch(function(er){ alert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.innerHTML = old; } });
+  }
+  window.SSA = { pdfSheets: pdfSheets, pdfResults: pdfResults, pdfPack: pdfPack, get cur(){ return CUR; } };
   /* ---------- router ---------- */
   function route(){ var h = hash(); window.scrollTo(0, 0);
     var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; document.getElementById("navRes").className = rules ? "" : "on";

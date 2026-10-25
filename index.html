@@ -3273,7 +3273,7 @@ var ARCH_MAX = 900000;
 function archNewId(){ var s = "", r = new Uint32Array(16); crypto.getRandomValues(r); for(var i = 0; i < 16; i++) s += SYNC_CODE_CHARS[r[i] % SYNC_CODE_CHARS.length]; return s; }
 function archivePayload(at){
   var sheets = squadSorted(S.shooters).map(function(sh){ var d = sheetData(sh); delete d.match; delete d.ver; delete d.method; delete d.neg; d.rows.forEach(function(r){ delete r.sigKey; }); return d; });
-  return { v: 1, publishedAt: at, match: { name: S.match.name, date: S.match.date, venue: S.match.venue, md: S.match.md, note: matchNote() }, notes: notesPlain(), neg: matchModel() !== "positive", method: METHOD_TEXT[matchMethod()] || "", ver: SS_VER, sheets: sheets, tables: resultsSnapshot().tables };
+  return { v: 1, publishedAt: at, match: { name: S.match.name, date: S.match.date, venue: S.match.venue, md: S.match.md, note: matchNote() }, notes: notesPlain(), neg: matchModel() !== "positive", method: METHOD_TEXT[matchMethod()] || "", ver: SS_VER, sheets: sheets, stages: S.stages.map(function(st){ return { no: st.no, title: st.title, rounds: stageTotal(st).rounds, firearms: st.firearms || [], limited: !!st.limited, sub: st.subtitle || "" }; }), tables: resultsSnapshot().tables };
 }
 function archivePublish(hide){
   if(!syncConfigured()) return Promise.reject(new Error("The archive needs the Firebase project (live sync set-up)."));
