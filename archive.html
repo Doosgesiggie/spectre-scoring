@@ -80,6 +80,13 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 .rules td.v{white-space:nowrap;font-weight:700;text-align:right}
 .rules ul{padding-left:20px;margin:6px 0}.rules li{margin:4px 0}
 .rules a.rbook{display:block;margin:10px 0 0;padding:14px 16px;border-radius:10px;background:var(--navy);color:#fff;font-weight:700;text-align:center;text-decoration:none;font-size:1.05em}
+.yrs{display:flex;gap:6px;overflow-x:auto;padding:2px 0 8px;-webkit-overflow-scrolling:touch}
+.yrs a{flex:0 0 auto;padding:8px 16px;border-radius:20px;border:1.5px solid var(--navy);color:var(--navy);text-decoration:none;font-weight:700}
+.yrs a.on{background:var(--navy);color:#fff}
+.mon{font-family:var(--cond);text-transform:uppercase;font-weight:900;color:var(--navy);font-size:.9em;letter-spacing:.04em;min-width:42px;text-align:center;line-height:1.1}
+.mon span{display:block;font-size:1.5em}
+.scope{display:flex;gap:14px;align-items:center;margin:6px 0 0;font-size:.9em}.scope label{display:flex;gap:5px;align-items:center}
+ul.hits{list-style:none;margin:8px 0 0;padding:0}ul.hits li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 /* sheet layout (shared with the app) */
 .sheet{font-size:10pt;color:#000;background:#fff}
 .sheet h1{font-size:15pt;margin:0 0 1mm}
@@ -299,25 +306,60 @@ function apkPages(m){
   function go(h){ location.hash = h; }
   function fail(er){ app.innerHTML = '<div class="card err">Could not load the archive: ' + e(er && er.message || er) + '</div><div class="card"><a class="btn" href="#">Back to the list</a></div>'; }
   function slug(s){ return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "sheet"; }
-  /* ---------- list ---------- */
-  function showList(){
+  /* ---------- list (grouped by year; one club shoot per month) ---------- */
+  var LIST = null, YEAR = null, ALLY = false, MDATA = {};
+  var MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  function yearOf(m){ var y = /^(\d{4})/.exec(String(m.date || "")) || /^(\d{4})/.exec(String(m.publishedAt || "")); return y ? y[1] : "Undated"; }
+  function years(){ var o = {}; LIST.forEach(function(m){ o[yearOf(m)] = 1; }); return Object.keys(o).sort(function(a, b){ return b.localeCompare(a); }); }
+  function defYear(){ var ys = years(), now = String(new Date().getFullYear()); return ys.indexOf(now) >= 0 ? now : (ys.filter(function(y){ return /^\d+$/.test(y); })[0] || ys[0] || now); }
+  function navY(){ document.getElementById("navRes").setAttribute("href", YEAR ? "#y=" + encodeURIComponent(YEAR) : "#"); }
+  function getList(){ if(LIST) return Promise.resolve(LIST);
+    if(window.SS_ARCHIVE_FAKE) return Promise.resolve(LIST = window.SS_ARCHIVE_FAKE.list.slice().sort(cmpM));
+    return sdk().then(function(){ return F.getDocs(F.query(F.collection(db, "archive"), F.where("hidden", "==", false))); }).then(function(q){
+      return LIST = q.docs.map(function(d){ var x = d.data(); x.id = d.id; return x; }).sort(cmpM); }); }
+  function cmpM(a, b){ return String(b.date).localeCompare(String(a.date)) || String(b.publishedAt).localeCompare(String(a.publishedAt)); }
+  function showList(y, q){
     app.innerHTML = '<div class="card">Loading the published matches…</div>';
-    sdk().then(function(){ return F.getDocs(F.query(F.collection(db, "archive"), F.where("hidden", "==", false))); }).then(function(q){
-      var list = q.docs.map(function(d){ var x = d.data(); x.id = d.id; return x; }).sort(function(a, b){ return String(b.date).localeCompare(String(a.date)) || String(b.publishedAt).localeCompare(String(a.publishedAt)); });
-      app.innerHTML = '<div class="card"><h2 style="margin-top:0">Published matches</h2>' + (list.length ? '<ul class="matches" id="mList">' + list.map(function(m){
-        return '<li><div class="grow"><b>' + e(m.matchName) + '</b><br><span class="small muted">' + e(m.date) + (m.venue ? ' · ' + e(m.venue) : "") + ' · ' + e(m.shooters) + ' shooters · ' + e(m.stages) + ' stages</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '" data-m="' + e(m.id) + '">Open</a></li>'; }).join("") + '</ul>' : '<p class="muted">No matches published yet.</p>') + '</div>';
+    getList().then(function(list){
+      var ys = years(); YEAR = (y && ys.indexOf(y) >= 0) ? y : (y || defYear());
+      navY(); var rows = list.filter(function(m){ return yearOf(m) === YEAR; });
+      app.innerHTML = '<div class="card"><h2 style="margin-top:0">Club shoots</h2>' +
+        (ys.length ? '<div class="yrs" id="yrs">' + ys.map(function(x){ return '<a href="#y=' + encodeURIComponent(x) + '"' + (x === YEAR ? ' class="on"' : "") + '>' + e(x) + '</a>'; }).join("") + '</div>' : "") +
+        '<label for="lq"><b>Find your name or a match</b></label><input type="search" id="lq" placeholder="Type part of a name" autocomplete="off" value="' + e(q || "") + '">' +
+        '<div class="scope"><label><input type="radio" name="sc" value="y"' + (ALLY ? "" : " checked") + '> ' + e(YEAR) + ' only</label><label><input type="radio" name="sc" value="a"' + (ALLY ? " checked" : "") + '> All years</label></div>' +
+        '<ul class="hits" id="hits"></ul></div>' +
+        '<div class="card" id="yrCard"><h3 style="margin:0 0 4px">' + e(YEAR) + ' <span class="small muted">· ' + rows.length + ' club shoot' + (rows.length === 1 ? "" : "s") + '</span></h3>' + (rows.length ? '<ul class="matches" id="mList">' + rows.map(function(m){
+          var mo = /^\d{4}-(\d{2})-(\d{2})/.exec(String(m.date || ""));
+          return '<li><div class="mon">' + (mo ? MON[+mo[1] - 1] + '<span>' + (+mo[2]) + '</span>' : "–") + '</div><div class="grow"><b>' + e(m.matchName) + '</b><br><span class="small muted">' + e(m.date) + (m.venue ? ' · ' + e(m.venue) : "") + ' · ' + e(m.shooters) + ' shooters · ' + e(m.stages) + ' stages</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '" data-m="' + e(m.id) + '">Open</a></li>'; }).join("") + '</ul>' : '<p class="muted">No club shoots published for ' + e(YEAR) + ' yet.</p>') + '</div>';
+      var inp = document.getElementById("lq"), tok = 0;
+      var run = function(){ var t = inp.value.trim().toLowerCase(), my = ++tok, hits = document.getElementById("hits"), card = document.getElementById("yrCard");
+        if(t.length < 2){ hits.innerHTML = ""; card.style.display = ""; return; }
+        card.style.display = "none";
+        var scope = list.filter(function(m){ return ALLY || yearOf(m) === YEAR; });
+        hits.innerHTML = '<li class="muted">Searching ' + scope.length + ' match' + (scope.length === 1 ? "" : "es") + '…</li>';
+        Promise.all(scope.map(function(m){ return matchData(m.id).catch(function(){ return null; }); })).then(function(ds){ if(my !== tok) return;
+          var out = [];
+          scope.forEach(function(m, i){ var mm = (m.matchName + " " + m.date + " " + (m.venue || "")).toLowerCase().indexOf(t) >= 0;
+            if(mm) out.push('<li><div class="grow"><b>' + e(m.matchName) + '</b> <span class="small muted">' + e(m.date) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '">Open</a></li>');
+            ((ds[i] && ds[i].sheets) || []).forEach(function(s){ if((s.sh.name + " " + s.sh.no).toLowerCase().indexOf(t) < 0) return;
+              out.push('<li><div class="grow"><b>' + e(s.sh.name) + '</b><br><span class="small muted">' + e(m.matchName) + ' · ' + e(m.date) + ' · ' + (s.ov && /^\d+$/.test(String(s.ov.place)) ? 'place ' + e(s.ov.place) + ', total ' + e(s.ov.total) : e(s.ov ? s.ov.place : "")) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '&s=' + encodeURIComponent(s.sh.id) + '">View sheet</a></li>'); }); });
+          hits.innerHTML = out.length ? out.join("") : '<li class="muted">Nothing matches “' + e(t) + '” in ' + (ALLY ? "any year" : e(YEAR)) + '.' + (ALLY ? "" : ' Try “All years”.') + '</li>'; }); };
+      inp.oninput = run;
+      Array.prototype.forEach.call(document.querySelectorAll('input[name=sc]'), function(r){ r.onchange = function(){ ALLY = r.value === "a"; run(); }; });
+      if(q) run();
     }).catch(fail);
   }
+  function matchData(id){ if(MDATA[id]) return MDATA[id];
+    if(window.SS_ARCHIVE_FAKE) return MDATA[id] = Promise.resolve(window.SS_ARCHIVE_FAKE.data[id] || null);
+    return MDATA[id] = sdk().then(function(){ return F.getDoc(F.doc(db, "archive", id, "data", "main")); }).then(function(d){ if(!d.exists() || !d.data().data) return null; var x = JSON.parse(d.data().data); x.id = id; return x; }); }
   /* ---------- one match ---------- */
   function loadMatch(id){
     if(CUR && CUR.id === id) return Promise.resolve(CUR);
-    return sdk().then(function(){ return F.getDoc(F.doc(db, "archive", id, "data", "main")); }).then(function(d){
-      if(!d.exists() || !d.data().data) throw new Error("This match is not in the archive (it may have been unpublished).");
-      CUR = JSON.parse(d.data().data); CUR.id = id; return CUR;
-    });
+    return matchData(id).then(function(x){ if(!x){ delete MDATA[id]; throw new Error("This match is not in the archive (it may have been unpublished)."); }
+      CUR = x; YEAR = /^(\d{4})/.test(String(x.match && x.match.date || "")) ? String(x.match.date).slice(0, 4) : YEAR; navY(); return CUR; });
   }
   function sheetObj(m, s){ var d = JSON.parse(JSON.stringify(s)); d.match = m.match; d.neg = m.neg; d.method = m.method; d.ver = m.ver; return d; }
-  function head(m){ return '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(m.match.name) + '</h2><div class="small muted">' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + (m.match.md ? ' · Match Director: ' + e(m.match.md) : "") + ' · published ' + e(String(m.publishedAt || "").slice(0, 16).replace("T", " ")) + ' UTC</div>' + (m.match.note ? '<div class="mnote"><b>Match note:</b> ' + e(m.match.note) + '</div>' : "") + '</div><a class="btn noprint" href="#">All matches</a></div></div>'; }
+  function head(m){ return '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(m.match.name) + '</h2><div class="small muted">' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + (m.match.md ? ' · Match Director: ' + e(m.match.md) : "") + ' · published ' + e(String(m.publishedAt || "").slice(0, 16).replace("T", " ")) + ' UTC</div>' + (m.match.note ? '<div class="mnote"><b>Match note:</b> ' + e(m.match.note) + '</div>' : "") + '</div><a class="btn noprint" href="#y=' + encodeURIComponent(String(m.match.date || "").slice(0, 4) || YEAR || "") + '">All ' + e(String(m.match.date || "").slice(0, 4)) + ' shoots</a></div></div>'; }
   function notesHTML(m){ var n = m.notes || []; return n.length ? '<h3>Notes</h3><ol class="anotes">' + n.map(function(x){ return '<li>Stage ' + e(x.stage) + ' · ' + e(x.shooter) + ': ' + e(x.text) + '</li>'; }).join("") + '</ol>' : ""; }
   function showMatch(id, q){
     app.innerHTML = '<div class="card">Loading…</div>';
@@ -388,12 +430,12 @@ function apkPages(m){
   window.SSA = { pdfSheets: pdfSheets, pdfResults: pdfResults, pdfPack: pdfPack, get cur(){ return CUR; } };
   /* ---------- router ---------- */
   function route(){ var h = hash(); window.scrollTo(0, 0);
-    var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; document.getElementById("navRes").className = rules ? "" : "on";
+    var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; var nr = document.getElementById("navRes"); nr.className = rules ? "" : "on"; navY();
     if(rules){ app.innerHTML = RULES_HTML; return; }
     if(h.m && h.s) return showSheet(h.m, h.s);
     if(h.m && h.r != null) return showResults(h.m, h.r);
     if(h.m) return showMatch(h.m, h.q);
-    showList(); }
+    showList(h.y, h.q); }
   window.addEventListener("hashchange", route); route();
 })();
 </script>
