@@ -352,7 +352,7 @@ function vpModel(m){
     footL: paper ? "Scores transcribed from the scorer's hand-written score sheets and verified by recalculation." : "Scores entered on the Spectre Scoring app (Range Officer named on every score) and verified by recalculation." };
   /* page 1 */
   var p1 = { kind: "overall", title: "CLUB SHOOT RESULTS", sub: (mt.name || "") + "  |  Overall results  |  Negative scoring model: lowest total wins", outline: "Overall results" };
-  p1.info = [["Match", mt.name || "", "Date", vpDate(mt.date), "Venue", mt.venue || ""], ["Match Director", mt.md || "", Object.keys(scorers).length > 1 ? "Scorers" : "Scorer", Object.keys(scorers).join(", ") || "-", "Shooters / stages", sheets.length + " shooters | " + stages.length + " stages (" + rounds + " rounds)"]];
+  p1.info = [["Match", mt.name || "", "Date", vpDate(mt.date), "Venue", (mt.venue || "") + (mt.venueTag ? " (" + mt.venueTag + ")" : "")], ["Match Director", mt.md || "", (mt.scorer ? /,|&| and /.test(mt.scorer) : Object.keys(scorers).length > 1) ? "Scorers" : "Scorer", mt.scorer || Object.keys(scorers).join(", ") || "-", "Shooters / stages", sheets.length + " shooters | " + stages.length + " stages (" + rounds + " rounds)"]];
   p1.podium = [0, 1, 2].map(function(i){ var r = ranked[i]; return { t: ["1ST", "2ND", "3RD"][i], name: r ? r.sh.name : "-", total: r ? "Total " + vpF2(vpNum(r.ov.total)) + " s" : "" }; });
   p1.heading = "OVERALL RESULTS (sum of Stage " + span + " scores, seconds)";
   p1.stages = stages.map(function(s){ return s.no; });
@@ -382,6 +382,7 @@ function vpModel(m){
     var steel = list.some(function(x){ return isN(x.r.standing) && x.r.standing > 0; });
     var fa = (st.firearms || []).filter(Boolean);
     var desc = tot + " rds" + (fa.length === 1 ? " " + fa[0] : "") + (st.limited ? (fa.length > 1 ? ", limited: " + vpList(fa) : ", limited") : (fa.length > 1 ? ": " + vpList(fa) : "")) + "." + (st.sub ? " " + String(st.sub).replace(/\.?$/, ".") : "");
+    if(st.desc) desc = String(st.desc);
     var pg = { kind: "stage", title: ("Stage " + st.no + "  |  " + (st.title || "")).toUpperCase(), sub: "Stage results  |  Stage score = time + penalty seconds  |  Lowest wins  |  " + tot + " rounds", outline: "Stage " + st.no + " - " + (st.title || ""), desc: desc, steel: steel, rows: [] };
     var ok = 0, scored = 0, bad = [], seen = {}, ties = [];
     var line = function(x, rank){ var r = x.r, nm = x.s.sh.name, mk = markOf(st.no, x.s);
@@ -398,7 +399,7 @@ function vpModel(m){
     rk.forEach(function(x){ pg.rows.push(line(x, String(x.r.place))); });
     oth.forEach(function(x){ pg.rows.push(line(x, /DQ/.test(x.r.place) ? "DQ" : /DNF/.test(x.r.place) ? "DNF" : "-")); });
     var expr = "HZ + PZI + PZII + Misses" + (steel ? " + Steel standing" : "");
-    var f = "Rounds counted = " + expr + "; expected " + expr + " = " + tot + ". " + (bad.length ? "Check: " + bad.join(", ") + ". " : "All " + ok + " of " + scored + " scored shooters total exactly " + tot + ". ") + "Penalty and stage score recalculated for every shooter. " + (ties.length ? "Ties share a rank (" + vpList(ties) + ")." : "Ties would share a rank; there are none.");
+    var f = "Rounds counted = " + expr + "; expected " + expr + " = " + tot + (st.roundsNote ? " (" + st.roundsNote + ")" : "") + ". " + (bad.length ? "Check: " + bad.join(", ") + ". " : "All " + ok + " of " + scored + " scored shooters total exactly " + tot + ". ") + "Penalty and stage score recalculated for every shooter. " + (ties.length ? "Ties share a rank (" + vpList(ties) + ")." : "Ties would share a rank; there are none.");
     var paras = [f];
     notes.forEach(function(n){ if(n.st !== st.no) return;
       if(n.corr) paras[0] += " " + n.mark + " " + n.s.sh.name + ": written " + vpF2(n.corr.was) + ", corrected to " + vpF2(n.corr.now) + " (" + vpF2(n.corr.time) + " + " + vpG(n.corr.pen) + ").";
@@ -443,6 +444,12 @@ function vpModel(m){
   notes.forEach(function(n){ if(!n.corr && !n.low) q.push("Stage " + n.st + ", " + n.s.sh.name + ": " + n.text); });
   if(!checks.counts.length) q.push("Hits counted: all rounds were scored, not the best two hits per target (\u00a74.2.2 default). This is consistent across all shooters.");
   sc.queries = q;
+  /* publisher-written score-check text (match.check) replaces / extends the generated text */
+  var ck = mt.check || {};
+  if(ck.method && ck.method.length) sc.method = ck.method.map(String);
+  if(ck.corrNote) sc.corrNote = String(ck.corrNote);
+  if(ck.low && ck.low.length){ sc.low = sc.low.concat(ck.low.map(function(r){ r = [].concat(r).map(String); while(r.length < 6) r.push("-"); return r.slice(0, 6); })); sc.lowNote = ""; }
+  if(ck.queries && ck.queries.length) sc.queries = ck.queries.map(String);
   M.pages.push(sc);
   return M;
 }
@@ -565,6 +572,124 @@ function vpRender(M, fonts){
 }
 function vpPack(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ return vpRender(vpModel(m), f); }); }
 
+/* ===== Vector score sheets and results tables (same house style as the pack: navy band, gold rule, Barlow, cream info table, zebra rows) ===== */
+function vpDocKit(fonts, M){
+  var J = window.jspdf.jsPDF, doc = new J({ unit: "pt", format: "a4", orientation: "landscape", compress: true });
+  VP_FONTS.forEach(function(n){ doc.addFileToVFS(n + ".ttf", fonts[n]); doc.addFont(n + ".ttf", n, "normal"); });
+  var K = { doc: doc, L: 34, R: 807.9, BOT: 552, y: 0, pno: 0, outline: [] }; K.W = K.R - K.L;
+  var hex = function(c){ return [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)]; };
+  K.box = function(x, y, w, h, c){ var v = hex(c); doc.setFillColor(v[0], v[1], v[2]); doc.rect(x, y, w, h, "F"); };
+  K.stroke = function(c, w){ var v = hex(c); doc.setDrawColor(v[0], v[1], v[2]); doc.setLineWidth(w); };
+  K.ln = function(x1, y1, x2, y2, c, w){ K.stroke(c, w); doc.line(x1, y1, x2, y2); };
+  K.font = function(f, s, c){ doc.setFont(f, "normal"); doc.setFontSize(s); var v = hex(c || VPC.text); doc.setTextColor(v[0], v[1], v[2]); };
+  K.tw = function(t, f, s){ K.font(f, s); return doc.getTextWidth(String(t)); };
+  K.txt = function(t, x, y, f, s, c, al){ t = String(t == null ? "" : t); if(!t) return; K.font(f, s, c); var w = doc.getTextWidth(t); if(al === "c") x -= w / 2; else if(al === "r") x -= w; doc.text(t, x, y); };
+  K.fit = function(t, f, s, width){ t = String(t == null ? "" : t); if(K.tw(t, f, s) <= width) return t; while(t.length > 1 && K.tw(t + "\u2026", f, s) > width) t = t.slice(0, -1); return t + "\u2026"; };
+  K.wrap = function(t, f, s, width){ var words = String(t).split(" "), out = [], cur = ""; K.font(f, s);
+    words.forEach(function(wd){ var tr = cur ? cur + " " + wd : wd; if(cur && doc.getTextWidth(tr) > width){ out.push(cur); cur = wd; } else cur = tr; }); if(cur) out.push(cur); return out; };
+  K.page = function(title, sub, outline){ if(K.pno) doc.addPage("a4", "landscape"); K.pno++; K.cur = { title: title, sub: sub };
+    K.box(K.L, 34, K.W, 45.4, VPC.navy); K.box(K.L, 34, 7.4, 45.4, VPC.gold); K.box(K.L, 76.8, K.W, 2.6, VPC.gold);
+    K.txt(K.fit(title, "BarlowCondensed-ExtraBold", 20, 520), 53.9, 61.2, "BarlowCondensed-ExtraBold", 20, VPC.white);
+    K.txt(K.fit(sub, "Barlow-Medium", 8.4, 560), 53.9, 73.1, "Barlow-Medium", 8.4, VPC.sub);
+    K.txt("SPECTRE TACTICAL SHOOTING", 793.7, 54.4, "BarlowCondensed-Bold", 11, VPC.gold, "r");
+    K.txt([M.venue, M.short].filter(Boolean).join("  |  "), 793.7, 70.3, "Barlow-Medium", 8.2, VPC.white, "r");
+    if(outline) K.outline.push({ t: outline, p: K.pno }); K.y = 90.7; };
+  K.more = function(){ K.page(K.cur.title + " (cont.)", K.cur.sub); K.y += 4; };
+  K.para = function(t, f, s, c, lead){ K.wrap(t, f, s, K.W).forEach(function(l){ if(K.y + lead > K.BOT + 8) K.more(); K.txt(l, K.L, K.y, f, s, c); K.y += lead; }); };
+  K.heading = function(t){ if(K.y + 40 > K.BOT) K.more(); K.txt(t, K.L, K.y, "BarlowCondensed-Bold", 13, VPC.navy); K.y += 5; };
+  /* info table: rows of [label, value, label, value, ...] on cream label cells */
+  K.info = function(rows, cols){ var iy = K.y; rows.forEach(function(row, ri){ var ry = K.y + ri * 16.4;
+      for(var k = 0; k < row.length; k += 2) K.box(cols[k], ry, cols[k + 1] - cols[k], 16.4, VPC.cream);
+      row.forEach(function(v, k){ var f = k % 2 ? "Barlow-SemiBold" : "Barlow-Bold"; K.txt(K.fit(v, f, 8.6, cols[k + 1] - cols[k] - 6.4), cols[k] + 3.2, ry + 11.2, f, 8.6, VPC.text); });
+      K.ln(K.L, ry + 16.4, K.R, ry + 16.4, VPC.line, 0.4); });
+    K.y += rows.length * 16.4; K.stroke(VPC.border, 0.8); doc.rect(K.L, iy, K.W, K.y - iy, "S"); };
+  /* table: cols = boundaries; head = [{t, a}]; rows = [{cells:[{t,f,c,a}], fills:[], h}] ; repeats the header on a new page */
+  K.table = function(cols, head, rows, hh, rh){ var top;
+    var drawHead = function(){ K.box(K.L, K.y, K.W, hh, VPC.navy);
+      head.forEach(function(h, i){ var lines = String(h.t).split("\n"), c0 = cols[i], c1 = cols[i + 1], mid = K.y + hh / 2;
+        lines.forEach(function(l, k){ var by = mid - (lines.length - 1) * 9.8 / 2 + 3.1 + k * 9.8; if(h.a === "l") K.txt(l, c0 + 3.2, by, "Barlow-Bold", 8.2, VPC.white); else K.txt(l, (c0 + c1) / 2, by, "Barlow-Bold", 8.2, VPC.white, "c"); }); });
+      top = K.y; K.y += hh; K.ln(K.L, K.y, K.R, K.y, VPC.line, 0.4); };
+    var frame = function(){ K.stroke(VPC.border, 0.8); doc.rect(K.L, top, K.W, K.y - top, "S"); };
+    drawHead();
+    rows.forEach(function(r, i){ var h = r.h || rh;
+      if(K.y + h > K.BOT){ frame(); K.more(); drawHead(); }
+      if((i + 1) % 2 === 0) K.box(K.L, K.y, K.W, h, VPC.zebra); (r.fills || []).forEach(function(c){ K.box(K.L, K.y, K.W, h, c); });
+      if(r.draw) r.draw(K.y, h); else r.cells.forEach(function(c, j){ if(c == null) return; var f = c.f || "Barlow-Regular", w = cols[j + 1] - cols[j] - 6.4, b = K.y + h / 2 + 3.05, t = K.fit(c.t, f, 8.6, w);
+        if(c.a === "l") K.txt(t, cols[j] + 3.2, b, f, 8.6, c.c || VPC.text); else K.txt(t, (cols[j] + cols[j + 1]) / 2, b, f, 8.6, c.c || VPC.text, "c"); });
+      K.y += h; K.ln(K.L, K.y, K.R, K.y, VPC.line, 0.4); });
+    frame(); };
+  K.finish = function(footL, footR, title){ var total = doc.getNumberOfPages();
+    for(var p = 1; p <= total; p++){ doc.setPage(p); K.ln(K.L, 564.1, K.R, 564.1, VPC.gold, 1.1);
+      K.txt(footL, K.L, 574.3, "Barlow-Italic", 7.2, VPC.muted); K.txt(footR + "  |  Page " + p + " of " + total, K.R, 574.3, "Barlow-Regular", 7.2, VPC.muted, "r"); }
+    doc.setProperties({ title: title, subject: footR, author: "Spectre Tactical Shooting", creator: "Spectre Scoring" });
+    if(doc.outline) K.outline.forEach(function(o){ doc.outline.add(null, o.t, { pageNumber: o.p }); });
+    return doc; };
+  return K;
+}
+function vpMeta(m){ var mt = m.match || {}; return { venue: mt.venue || "", short: vpDate(mt.date, true), name: mt.name || "", mt: mt,
+  venueFull: (mt.venue || "") + (mt.venueTag ? " (" + mt.venueTag + ")" : "") }; }
+/* one A4 landscape page per shooter: info, every stage, match total, notes */
+function vpSheetsRender(m, list, fonts, printed){
+  var M = vpMeta(m), mt = M.mt, K = vpDocKit(fonts, M), L = K.L, R = K.R;
+  list.forEach(function(s){ var sh = s.sh || {}, rows = s.rows || [];
+    K.page("SCORE SHEET  |  " + String(sh.name || "").toUpperCase(), (mt.name || "") + "  |  " + (m.neg === false ? "Points scoring" : "Negative scoring model: lowest total wins"), sh.name);
+    var ic = [L, 107.7, 283.5, 365.7, 470.6, 561.3, R];
+    K.info([["Match", mt.name || "", "Date", vpDate(mt.date), "Venue", M.venueFull],
+      ["Shooter", (sh.name || "") + (sh.visitor ? "  (visitor)" : ""), "Shooter no.", sh.no || "-", "Squad", sh.squad || "-"],
+      ["Match Director", mt.md || "", "Member no.", sh.member || (sh.visitor ? "Visitor" : "-"), "Division", (sh.divs || "") + (sh.cat ? " | " + sh.cat : "")]], ic);
+    K.y += 22; K.heading("STAGE SCORES"); 
+    var hd = [{ t: "Stage", a: "l" }, { t: "HZ\n+0" }, { t: "PZI\nx1" }, { t: "PZII\nx3" }, { t: "Misses\nx7" }, { t: "Steel\nstanding" }, { t: "Proced.\nx3" }, { t: "No-shoot\nx7" }, { t: "Time (s)" }, { t: m.neg === false ? "Penalty\npts" : "Penalty (s)" }, { t: "Stage score" }, { t: "Place" }];
+    var c = [L, 255.1]; for(var i = 0; i < 7; i++) c.push(c[c.length - 1] + 46); c.push(c[c.length - 1] + 62); c.push(c[c.length - 1] + 62); c.push(c[c.length - 1] + 62); c.push(R);
+    var fns = [];
+    var body = [];
+    rows.forEach(function(r){ var mk = ""; if(r.note){ fns.push("Stage " + r.no + ": " + r.note); mk = " " + VP_MARKS[fns.length - 1]; }
+      var nm = { t: r.no + "  " + (r.title || ""), f: "Barlow-Bold", a: "l" };
+      if(r.none || r.hz == null){ body.push({ cells: [nm, { t: r.none ? "Not scored" : String(r.score || "-"), a: "l", f: "Barlow-SemiBold", c: VPC.red }], h: 16 }); }
+      else { var z = function(v){ return v == null || v === "" ? "" : String(v); }, sc = String(r.score || "").replace(/ s$/, "");
+        body.push({ cells: [nm].concat(["hz", "pz1", "pz2", "miss", "standing", "pen", "ns"].map(function(k){ return { t: z(r[k]) }; })).concat([{ t: z(r.time) }, { t: m.neg === false ? z(r.penT) : vpG(r.pz1 + r.pz2 * 3 + r.miss * 7 + (r.standing || 0) * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7) }, { t: sc + mk, f: "Barlow-Bold" }, { t: z(r.place), f: "Barlow-Bold" }]), h: 16,
+          fills: /^[123]$/.test(String(r.place)) ? [[VPC.p1, VPC.p2, VPC.p3][+r.place - 1]] : [] }); }
+      if(r.by) body.push({ h: 12.5, draw: function(ty){ K.txt(K.fit((/paper|hand-?written|transcrib/i.test(r.by) ? r.by : "Scored by " + r.by) + (r.at ? " | " + r.at : "") + (r.dev ? " | " + r.dev : ""), "Barlow-Italic", 7.4, K.W - 12), c[1] + 3.2, ty + 8.8, "Barlow-Italic", 7.4, VPC.muted); } }); });
+    K.table(c, hd, body, 24.8, 16);
+    var ov = s.ov;
+    if(ov){ K.y += 11.3; var bx = [[L, 280.6], [297.6, 544.3]], vals = [["MATCH TOTAL", String(ov.total || "-")], ["OVERALL PLACE", String(ov.place || "-") + (ov.of && /^\d/.test(String(ov.place)) ? " of " + ov.of : "")]];
+      vals.forEach(function(v, i){ var x0 = bx[i][0], x1 = bx[i][1], cx = (x0 + x1) / 2; K.box(x0, K.y, x1 - x0, 42, i ? VPC.p2 : VPC.p1); K.stroke(i ? VPC.border : VPC.gold, 1.2); K.doc.rect(x0, K.y, x1 - x0, 42, "S");
+        K.txt(v[0], cx, K.y + 15.5, "BarlowCondensed-ExtraBold", 12, VPC.navy, "c"); K.txt(v[1], cx, K.y + 33, "Barlow-Bold", 13, VPC.text, "c"); });
+      if(ov.label) K.txt(ov.label, 561.3, K.y + 24, "Barlow-Regular", 8.4, VPC.muted);
+      K.y += 42; }
+    K.y += 18;
+    fns.forEach(function(f, i){ K.para(VP_MARKS[i] + " " + f, "Barlow-Regular", 7.6, VPC.foot, 9.6); });
+    if(mt.note) K.para("Match note: " + mt.note, "Barlow-Regular", 7.6, VPC.foot, 9.6);
+    K.para((ov && ov.label ? ov.label + ". " : "") + (m.method || "") + ".", "Barlow-Regular", 7.6, VPC.foot, 9.6);
+  });
+  var paper = list.some(function(s){ return (s.rows || []).some(function(r){ return /paper|hand-?written|transcrib/i.test(r.by || ""); }); });
+  return K.finish((paper ? "Scores transcribed from the scorer's hand-written score sheets." : "Every score is stamped on the scoring phone with the Range Officer's name and the time.") + "  Spectre Scoring " + (m.ver || "") + (printed ? "  |  " + printed : ""),
+    (mt.name || "") + " - Score sheets", (mt.name || "Club shoot") + " - Score sheets");
+}
+/* results tab tables (every ranking table the archive publishes) */
+function vpResultsRender(m, fonts){
+  var M = vpMeta(m), mt = M.mt, K = vpDocKit(fonts, M), L = K.L, R = K.R;
+  (m.tables || []).forEach(function(t){ var h = (t.h || []).map(String), n = h.length;
+    K.page("RESULTS  |  " + String(t.t || "").toUpperCase(), String(t.s || ""), t.t);
+    /* column widths from content (shooter column takes the slack) */
+    var w = h.map(function(x, j){ var mx = K.tw(x, "Barlow-Bold", 8.2); (t.r || []).forEach(function(r){ mx = Math.max(mx, K.tw(r[j] == null ? "" : r[j], "Barlow-Regular", 8.6)); }); return Math.min(mx + 12, 220); });
+    var sum = w.reduce(function(a, b){ return a + b; }, 0), nameCol = h.indexOf("Shooter");
+    if(sum < K.W){ var ex = K.W - sum; if(nameCol >= 0){ var g = Math.min(ex, 140); w[nameCol] += g; ex -= g; } w = w.map(function(x){ return x + ex / n; }); } else w = w.map(function(x){ return x * K.W / sum; });
+    var c = [L]; w.forEach(function(x){ c.push(c[c.length - 1] + x); }); c[c.length - 1] = R;
+    var hd = h.map(function(x, j){ return { t: x, a: j === nameCol ? "l" : "c" }; });
+    var rows = (t.r || []).map(function(r){ var pl = r[h.indexOf("#")]; return { cells: r.map(function(v, j){ return { t: v == null ? "" : String(v), a: j === nameCol ? "l" : "c", f: (j === nameCol || h[j] === "Total") ? "Barlow-Bold" : "Barlow-Regular" }; }),
+      fills: /^[123]$/.test(String(pl)) ? [[VPC.p1, VPC.p2, VPC.p3][+pl - 1]] : [] }; });
+    if(!rows.length) rows.push({ cells: [{ t: "No scores.", a: "l" }] });
+    K.table(c, hd, rows, 15.4, 14.3);
+    K.y += 12.1;
+    (m.notes || []).forEach(function(x){ K.para("Stage " + x.stage + ", " + x.shooter + ": " + x.text, "Barlow-Regular", 7.6, VPC.foot, 9.6); });
+    if(mt.note) K.para("Match note: " + mt.note, "Barlow-Regular", 7.6, VPC.foot, 9.6);
+  });
+  if(!K.pno) K.page("RESULTS", mt.name || "", "Results");
+  return K.finish("Results as published on the Spectre Scoring archive" + (m.publishedAt ? " (" + String(m.publishedAt).slice(0, 10) + ")" : "") + ".", (mt.name || "") + " - Full results", (mt.name || "Club shoot") + " - Full results");
+}
+function vpSheets(m, list, fontBase, printed){ return vpLoadFonts(fontBase).then(function(f){ return vpSheetsRender(m, list, f, printed); }); }
+function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ return vpResultsRender(m, f); }); }
+
 </script>
 <script>
 (function(){
@@ -669,27 +794,18 @@ function vpPack(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ ret
       packWire(m);
     }).catch(fail);
   }
-  /* ---------- PDF (in the browser: html2canvas + jsPDF, loaded on first use) ---------- */
+  /* ---------- PDF (in the browser: jsPDF, loaded on first use) ---------- */
   var libP = null;
   function pdfLib(){ if(window.jspdf && window.html2canvas) return Promise.resolve(); if(libP) return libP;
     libP = new Promise(function(ok, no){ var s = document.createElement("script"); s.src = "archive-pdf.js"; s.onload = ok; s.onerror = function(){ libP = null; no(new Error("Could not load the PDF maker – check the signal.")); }; document.head.appendChild(s); }); return libP; }
-  /* each block = one page (sheet) or a long block sliced into A4 pages (results) */
-  function pdfBlocks(htmls, name, btn){
-    var old = btn && btn.textContent; if(btn){ btn.disabled = true; btn.textContent = "Making PDF…"; }
-    var stage = document.getElementById("pdfStage");
-    return pdfLib().then(function(){
-      var pdf = new window.jspdf.jsPDF({ unit: "mm", format: "a4", orientation: "portrait" }), first = true, W = 210, H = 297;
-      return htmls.reduce(function(p, html){ return p.then(function(){ stage.innerHTML = html;
-        return window.html2canvas(stage, { scale: 2, backgroundColor: "#ffffff", logging: false }).then(function(c){
-          var pxPerMm = c.width / W, pageH = Math.floor(H * pxPerMm), y = 0;
-          while(y < c.height){ var h = Math.min(pageH, c.height - y), part = document.createElement("canvas"); part.width = c.width; part.height = h;
-            part.getContext("2d").drawImage(c, 0, y, c.width, h, 0, 0, c.width, h);
-            if(!first) pdf.addPage(); first = false; pdf.addImage(part.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, W, h / pxPerMm); y += pageH; }
-        }); }); }, Promise.resolve()).then(function(){ stage.innerHTML = ""; window.__lastPdf = { name: name, pages: pdf.getNumberOfPages() }; pdf.save(name); });
-    }).catch(function(er){ alert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.textContent = old; } });
+  /* score sheets and results tables as true vector PDFs (real text, embedded Barlow) – vpdf-pack.js */
+  function pdfVec(make, name, btn){
+    var old = btn && btn.textContent; if(btn){ btn.disabled = true; btn.textContent = "Making PDF\u2026"; }
+    return pdfLib().then(make).then(function(pdf){ window.__lastPdf = { name: name, pages: pdf.getNumberOfPages() }; pdf.save(name); })
+    .catch(function(er){ alert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.textContent = old; } });
   }
-  function pdfSheets(m, list, btn){ return pdfBlocks(list.map(function(s){ return sheetRender(sheetObj(m, s), null, "published " + String(m.publishedAt || "").slice(0, 10)); }), slug(m.match.name) + "-" + (list.length === 1 ? slug(list[0].sh.name) : "score-sheets") + ".pdf", btn); }
-  function pdfResults(m, btn){ return pdfBlocks((m.tables || []).map(function(t, i){ return '<div class="sheet"><div class="shhead"><div><h1>' + e(m.match.name) + '</h1><div>' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + '</div></div><div class="shtag">Results</div></div>' + resultsHTML(m, i).replace(/<div class="restabs noprint">[\s\S]*?<\/div>/, "") + '</div>'; }), slug(m.match.name) + "-results.pdf", btn); }
+  function pdfSheets(m, list, btn){ return pdfVec(function(){ return vpSheets(m, list, "fonts/", "published " + String(m.publishedAt || "").slice(0, 10)); }, slug(m.match.name) + "-" + (list.length === 1 ? slug(list[0].sh.name) : "score-sheets") + ".pdf", btn); }
+  function pdfResults(m, btn){ return pdfVec(function(){ return vpResults(m, "fonts/"); }, slug(m.match.name) + "-results.pdf", btn); }
   /* Gunny's results pack: one A4 landscape PDF page per pack page (archive-pack.js builds the HTML) */
   function packWire(m){ var b = document.getElementById("packPdf"); if(!b) return; if(m.neg === false){ b.parentNode.style.display = "none"; return; } b.onclick = function(){ pdfPack(m, b); }; }
   /* Gunny's results pack as a true vector PDF (real text, embedded Barlow fonts) – vpdf-pack.js mirrors his ReportLab layout */

@@ -572,7 +572,7 @@ function exampleMatch(){
   s2.req = { s2t2: { mode: "moz" }, s2t3: { mode: "moz" }, s2t4: { mode: "moz" } };
 
   var s3 = Object.assign(newStage(), {
-    id: "ex-s3", title: "3-Gun Fuckery Redux", subtitle: "Handgun, shotgun and rifle with club-procedure transitions",
+    id: "ex-s3", title: "3-Gun Fun Redux", subtitle: "Handgun, shotgun and rifle with club-procedure transitions",
     division: "DB", firearms: ["handgun","shotgun","rifle"], limited: true, scoring: "negative", cover: false, penalties: Object.assign({}, pen),
     semiAuto: true,
     loads: { handgun: [6, 6], shotgun: [5, 2], rifle: [12] },
@@ -2281,8 +2281,9 @@ function editShooter(id){
 function renderMatch(){
   var ro = S.role === "ro", h = '<h2>Match</h2>';
   h += '<div class="card"><h3>Match</h3>' + (ro ? '<div><b>' + esc(S.match.name) + '</b><br>' + esc(S.match.date) + ' · ' + esc(S.match.venue) + '</div>' :
-    '<label>Name</label><input id="mName" value="' + esc(S.match.name) + '"><div class="grid2"><div><label>Date</label><input id="mDate" type="date" value="' + esc(S.match.date) + '"></div><div><label>Match Director</label><input id="mMd" value="' + esc(S.match.md) + '"></div></div><label>Venue</label><input id="mVenue" value="' + esc(S.match.venue) + '">') + '</div>';
+    '<label>Name</label><input id="mName" value="' + esc(S.match.name) + '"><div class="grid2"><div><label>Date</label><input id="mDate" type="date" value="' + esc(S.match.date) + '"></div><div><label>Match Director</label><input id="mMd" value="' + esc(S.match.md) + '"></div></div><label>Venue</label><input id="mVenue" value="' + esc(S.match.venue) + '"><div class="grid2"><div><label>Scorer(s)</label><input id="mScorer" value="' + esc(S.match.scorer || "") + '" placeholder="names only"></div><div><label>Venue short name</label><input id="mVenueTag" value="' + esc(S.match.venueTag || "") + '" placeholder="e.g. SWPC"></div></div>') + '</div>';
   h += notesCard();
+  if(!ro) h += packTextCard();
   h += '<div class="card"><h3>This phone</h3><label>Phone name (shown on packs and scores)</label><input id="devName" value="' + esc(S.device.name) + '" placeholder="e.g. Main, RO Stage 2"><div class="small muted" style="margin-top:6px">Scoring model: <b>' + esc(matchModel() || "–") + '</b>' + (isMultiGun() ? " · multi-gun (open rankings)" : "") + '<br>Role: <b>' + (ro ? "RO phone" : "Main phone") + '</b>' + (ro && S.ro ? " – stages " + S.stages.filter(function(s){ return S.ro.assigned.indexOf(s.id) >= 0; }).map(function(s){ return s.no; }).join(", ") + (S.ro.main ? ", from " + esc(S.ro.main) : "") : "") + '</div>' + (ro ? '<button type="button" class="wide" style="margin-top:8px" data-act="makemain">Make this the main phone…</button>' : "") + '</div>';
   h += '<div class="card"><h3>Import</h3><button type="button" class="primary wide" data-act="import">Import a file…</button><p class="small muted">Stage Designer match or stage file (any version), shooters CSV, a stage pack, a scores pack or a backup – the type is detected.</p><button type="button" class="wide" data-act="scan">Scan QR codes…</button></div>';
   if(!ro){
@@ -2308,6 +2309,9 @@ function renderMatch(){
   function bind(id, fn){ var e = $(id); if(e) e.onchange = fn; }
   bind("mName", function(){ S.match.name = this.value; saveState(); }); bind("mDate", function(){ S.match.date = this.value; saveState(); });
   bind("mMd", function(){ S.match.md = this.value; saveState(); }); bind("mVenue", function(){ S.match.venue = this.value; saveState(); });
+  bind("mScorer", function(){ S.match.scorer = this.value.trim(); saveState(); }); bind("mVenueTag", function(){ S.match.venueTag = this.value.trim(); saveState(); });
+  Array.prototype.forEach.call(view().querySelectorAll("[data-pst]"), function(el){ el.onchange = function(){ var ps = S.match.packStages = S.match.packStages || {}, o = ps[el.dataset.pst] = ps[el.dataset.pst] || {}; o[el.dataset.k] = el.value.trim(); saveState(); }; });
+  Array.prototype.forEach.call(view().querySelectorAll("[data-pck]"), function(el){ el.onchange = function(){ var c = S.match.packCheck = S.match.packCheck || {}; c[el.dataset.pck] = el.value; saveState(); }; });
   bind("mRankDiv", function(){ S.match.rankByDiv = this.checked; saveState(); if(typeof squadsRepublish === "function") squadsRepublish(); render(); });
   bind("devName", function(){ S.device.name = this.value.trim(); saveState(); render(); });
   syncBind(); regBind(); rolesBind(); archiveBind(); notesBind();
@@ -2438,6 +2442,19 @@ function importObject(obj, name, txt){
     if(p.kind === "scorespack") return mergeScoresPack(p).then(function(r){ render(); var m = "Scores from " + r.from + ": " + r.added + " new, " + r.same + " already here" + (r.unknown ? ", " + r.unknown + " for unknown stages/shooters (skipped)" : "") + (r.conflicts ? ", " + r.conflicts + " conflict(s) to resolve." : "."); return alertMsg(m).then(function(){ if(r.conflicts) renderMerge(); }); });
     if(p.kind === "backup") return ask("Restore the backup “" + (p.state.match && p.state.match.name) + "” from " + fmtWhen(p.createdAt) + "? Everything on this phone is replaced.", { ok: "Restore", okClass: "danger" }).then(function(ok){ if(!ok) return; return restoreBackup(p).then(function(){ U.screen = "stages"; U.stage = null; render(); toast("Backup restored"); }); });
   }catch(e){ return alertMsg("Could not use " + name + ":\n" + e.message + "\nNothing was changed."); }
+}
+
+/* ---- results pack text (published with the archive; names and text only) ---- */
+function packTextCard(){
+  var ps = S.match.packStages || {}, ck = S.match.packCheck || {};
+  return '<details class="card" id="packText"><summary>Results pack text (optional)</summary><p class="small muted">Shown in the published results pack. Leave blank for the generated text. Names and text only – never ID or cell numbers.</p>' +
+    S.stages.map(function(st){ var o = ps[st.id] || {};
+      return '<label>Stage ' + st.no + ' summary</label><textarea rows="2" data-pst="' + esc(st.id) + '" data-k="desc" placeholder="' + esc(st.subtitle || "") + '">' + esc(o.desc || "") + '</textarea>' +
+        '<label>Stage ' + st.no + ' round breakdown</label><input data-pst="' + esc(st.id) + '" data-k="rounds" value="' + esc(o.rounds || "") + '" placeholder="' + esc(archAutoRounds(st)) + '">'; }).join("") +
+    '<label>Score check: method (one point per line)</label><textarea rows="3" data-pck="method">' + esc(ck.method || "") + '</textarea>' +
+    '<label>Score check: correction effect</label><textarea rows="2" data-pck="corrNote">' + esc(ck.corrNote || "") + '</textarea>' +
+    '<label>Low-confidence readings (one per line: Stage | Shooter | Cell | What is on the sheet | Read as | Effect)</label><textarea rows="3" data-pck="low">' + esc(ck.low || "") + '</textarea>' +
+    '<label>Queries for the MD (one per line)</label><textarea rows="3" data-pck="queries">' + esc(ck.queries || "") + '</textarea></details>';
 }
 /* ===================== Live sync (optional, Firebase Firestore + Anonymous Auth) =====================
    Off by default. Nothing is loaded and nothing touches the network until the user switches it on.
@@ -3377,9 +3394,28 @@ function sheetsDialog(){
    Firestore docs only (Spark plan, no Storage); the archive page draws the sheets and makes the PDFs in the browser.          */
 var ARCH_MAX = 900000;
 function archNewId(){ var s = "", r = new Uint32Array(16); crypto.getRandomValues(r); for(var i = 0; i < 16; i++) s += SYNC_CODE_CHARS[r[i] % SYNC_CODE_CHARS.length]; return s; }
+/* results-pack extras (names and text only – never ID or cell numbers): scorer(s), venue short name, per-stage summary + round breakdown, score-check text */
+function archLines(t){ return String(t || "").split(/\r?\n/).map(function(x){ return x.trim(); }).filter(Boolean); }
+function archMatchInfo(){
+  var m = S.match, ck = m.packCheck || {}, o = { name: m.name, date: m.date, venue: m.venue, md: m.md, note: matchNote() };
+  if(String(m.scorer || "").trim()) o.scorer = String(m.scorer).trim().slice(0, 200);
+  if(String(m.venueTag || "").trim()) o.venueTag = String(m.venueTag).trim().slice(0, 40);
+  var c = {}, meth = archLines(ck.method), q = archLines(ck.queries), low = archLines(ck.low).map(function(l){ return l.split("|").map(function(x){ return x.trim(); }); });
+  if(meth.length) c.method = meth; if(q.length) c.queries = q; if(low.length) c.low = low; if(String(ck.corrNote || "").trim()) c.corrNote = String(ck.corrNote).trim();
+  if(Object.keys(c).length) o.check = c;
+  return o;
+}
+/* auto round breakdown from the designer engagements: "all rounds on T1" or "T1 6 + T2 3 + …" (targets in first-shot order) */
+function archAutoRounds(st){
+  var lab = {}, order = [], n = {}; (st.items || []).forEach(function(i){ lab[i.id] = i.label || i.id; });
+  (st.engagements || []).forEach(function(e){ var k = lab[e.target] || e.target; if(!k) return; if(!(k in n)){ n[k] = 0; order.push(k); } n[k] += +e.rounds || 0; });
+  if(!order.length) return ""; if(order.length === 1) return "all rounds on " + order[0];
+  return order.map(function(k){ return k + " " + n[k]; }).join(" + ");
+}
+function archPackStage(st){ var o = ((S.match.packStages || {})[st.id]) || {}; return { desc: String(o.desc || "").trim(), rounds: String(o.rounds || "").trim() || archAutoRounds(st) }; }
 function archivePayload(at){
   var sheets = squadSorted(S.shooters).map(function(sh){ var d = sheetData(sh); delete d.match; delete d.ver; delete d.method; delete d.neg; d.rows.forEach(function(r){ delete r.sigKey; }); return d; });
-  return { v: 1, publishedAt: at, match: { name: S.match.name, date: S.match.date, venue: S.match.venue, md: S.match.md, note: matchNote() }, notes: notesPlain(), neg: matchModel() !== "positive", method: METHOD_TEXT[matchMethod()] || "", ver: SS_VER, sheets: sheets, stages: S.stages.map(function(st){ return { no: st.no, title: st.title, rounds: stageTotal(st).rounds, firearms: st.firearms || [], limited: !!st.limited, sub: st.subtitle || "" }; }), tables: resultsSnapshot().tables };
+  return { v: 1, publishedAt: at, match: archMatchInfo(), notes: notesPlain(), neg: matchModel() !== "positive", method: METHOD_TEXT[matchMethod()] || "", ver: SS_VER, sheets: sheets, stages: S.stages.map(function(st){ return { no: st.no, title: st.title, rounds: stageTotal(st).rounds, firearms: st.firearms || [], limited: !!st.limited, sub: st.subtitle || "", desc: archPackStage(st).desc, roundsNote: archPackStage(st).rounds }; }), tables: resultsSnapshot().tables };
 }
 /* ---------- who may publish: allow-listed uids (Firestore publishers/{uid}, added by hand in the Firebase console) ---------- */
 /* publisher check runs only on a tap or a publish (never on render: no surprise sign-ins / network on ordinary phones); last answer remembered on this phone */
