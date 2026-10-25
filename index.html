@@ -2180,6 +2180,7 @@ function renderMatch(){
     h += '<div class="card"><h3>Send scores to the main phone</h3><p class="small">' + n + ' score(s) on this phone. Send the whole set every time – the main phone skips the ones it already has.</p><div class="grid2"><button type="button" class="primary" data-act="scorespack"' + (n ? "" : " disabled") + '>Share file</button><button type="button" data-act="scoresqr"' + (n ? "" : " disabled") + '>Show QR</button></div></div>';
   }
   h += syncCard();
+  h += regCard();
   h += '<div class="card"><h3>Backup</h3><div class="grid2"><button type="button" data-act="backup">Export backup</button><button type="button" data-act="import">Restore…</button></div><p class="small muted">The backup holds everything (match, stages, shooters, scores, signatures, audit trail). Keep one after each stage.</p></div>';
   h += '<div class="card"><h3>Display</h3><label class="agree' + (PREFS.dark ? " on" : "") + '"><input type="checkbox" id="pDark"' + (PREFS.dark ? " checked" : "") + '> Dark mode</label><label class="agree' + (PREFS.big ? " on" : "") + '"><input type="checkbox" id="pBig"' + (PREFS.big ? " checked" : "") + '> Larger text</label></div>';
   if(S.audit.length) h += '<details class="card"><summary>Audit trail (' + S.audit.length + ')</summary><ul class="list-plain small">' + S.audit.slice().reverse().slice(0, 60).map(function(a){ var p = String(a.key || "").split("|"), st = stageById(p[0]), sh = shooterById(p[1]); return "<li>" + fmtWhen(a.at) + " · " + esc(a.device || "") + "<br><b>" + (st ? "Stage " + st.no + " " : "") + esc(sh ? shName(sh) : "") + "</b> " + esc(a.note || "") + (a.from || a.to ? "<br>" + esc(a.from || "") + " → " + esc(a.to || "") : "") + "</li>"; }).join("") + '</ul></details>';
@@ -2191,7 +2192,7 @@ function renderMatch(){
   bind("mName", function(){ S.match.name = this.value; saveState(); }); bind("mDate", function(){ S.match.date = this.value; saveState(); });
   bind("mMd", function(){ S.match.md = this.value; saveState(); }); bind("mVenue", function(){ S.match.venue = this.value; saveState(); });
   bind("devName", function(){ S.device.name = this.value.trim(); saveState(); render(); });
-  syncBind();
+  syncBind(); regBind();
   bind("pDark", function(){ PREFS.dark = this.checked; savePrefs(); render(); }); bind("pBig", function(){ PREFS.big = this.checked; savePrefs(); render(); });
 }
 function fmtWhen(iso){ if(!iso) return ""; var d = new Date(iso); return d.toLocaleDateString("en-ZA", { day: "numeric", month: "short" }) + " " + d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" }); }
@@ -2375,7 +2376,8 @@ function syncTransport(){
       watchScores: function(code, cb, onErr){ return F.onSnapshot(F.collection(db, "rooms", code, "scores"), function(q){ cb(q.docChanges().filter(function(c){ return c.type !== "removed"; }).map(function(c){ return c.doc.data(); })); }, onErr); },
       putResults: function(code, data){ return F.setDoc(F.doc(db, "rooms", code, "results", "current"), data); },
       watchResults: function(code, cb, onErr){ return F.onSnapshot(F.doc(db, "rooms", code, "results", "current"), function(d){ cb(d.exists() ? d.data() : null); }, onErr); },
-      online: function(on){ return on ? F.enableNetwork(db) : F.disableNetwork(db); }
+      online: function(on){ return on ? F.enableNetwork(db) : F.disableNetwork(db); },
+      F: F, db: db /* raw SDK handles: shooter registration (s-reg.js) */
     };
     SYNCRT.t = t; return t;
   });
@@ -2563,6 +2565,171 @@ function syncBoot(){
   syncPaint();
   if(SYNC.on && syncConfigured()) syncStart();
 }
+/* ===================== Shooter registration – shared by the scoring app (organiser) and register.html (shooters) =====================
+   regs/{CODE}                 match registration (name, date, divisions, squads {id:{n,max}}, closesMs, closed) – no personal data
+   regs/{CODE}/counts/{squad}  public squad counters {n, last}
+   regs/{CODE}/entries/{TOKEN} one entry; the 24-character random id is the shooter's private edit token
+   Every entry change runs in a transaction together with the squad counter(s) it moves, so a full squad can never be overfilled. */
+var REG_TOKEN_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+function regToken(){ var s = "", r = new Uint32Array(24); crypto.getRandomValues(r); for(var i = 0; i < 24; i++) s += REG_TOKEN_CHARS[r[i] % REG_TOKEN_CHARS.length]; return s; }
+function regCleanTok(t){ t = String(t || ""); return /^[A-Za-z0-9]{24}$/.test(t) ? t : ""; }
+function regSquadIds(reg){ return Object.keys(reg && reg.squads || {}).sort(function(a, b){ return a.localeCompare(b, undefined, { numeric: true }); }); }
+function regIsOpen(reg, now){ return !!reg && !reg.closed && (now || Date.now()) < reg.closesMs; }
+function regDivCode(d){ return String(d || "").split(" – ")[0].trim(); }
+function regNowISO(){ return new Date().toISOString(); }
+/* save (create / edit / cancel / re-enter / organiser paid-remove) an entry. patch = fields to change. Resolves to the saved entry. */
+function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
+  var regRef = F.doc(db, "regs", code), entRef = F.doc(db, "regs", code, "entries", tok), cnt = function(sq){ return F.doc(db, "regs", code, "counts", sq); };
+  return F.runTransaction(db, function(tx){
+    return Promise.all([tx.get(regRef), tx.get(entRef)]).then(function(r){
+      if(!r[0].exists()) throw new Error("This registration does not exist.");
+      var reg = r[0].data(), o = r[1].exists() ? r[1].data() : null, now = regNowISO();
+      if(!asOrg && !regIsOpen(reg)) throw new Error("Registration is closed.");
+      var d = Object.assign({}, o || { first: "", last: "", member: "", email: "", division: "", pf: "minor", cls: "", cat: "", squad: "", status: "active", paid: false, createdAt: now }, patch);
+      if(!asOrg) d.uid = uid; d.updatedAt = now; if(!o){ d.paid = false; d.status = "active"; }
+      if(!reg.squads[d.squad]) throw new Error("Choose a squad.");
+      var wasA = !!o && o.status === "active", isA = d.status === "active", same = wasA && isA && o.squad === d.squad;
+      var leave = wasA && !same ? o.squad : "", join = isA && !same ? d.squad : "";
+      return Promise.all([leave ? tx.get(cnt(leave)) : null, join ? tx.get(cnt(join)) : null]).then(function(c){
+        if(join){ var n = c[1] && c[1].exists() ? c[1].data().n : 0; if(n >= reg.squads[join].max) throw new Error("Squad " + reg.squads[join].n + " is full – choose another squad."); tx.set(cnt(join), { n: n + 1, last: tok }); }
+        if(leave){ var m = c[0] && c[0].exists() ? c[0].data().n : 1; tx.set(cnt(leave), { n: Math.max(0, m - 1), last: tok }); }
+        tx.set(entRef, d); return d;
+      });
+    });
+  });
+}
+function regCSV(reg, entries){
+  var q = function(v){ v = String(v == null ? "" : v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  var rows = [["First Name","Last Name","Member #","Email","Division","Power Factor","Class","Category","Squad","Status","Paid","Registered","Updated"]];
+  entries.forEach(function(e){ rows.push([e.first, e.last, e.member, e.email, e.division, e.pf, e.cls, e.cat, reg.squads[e.squad] ? reg.squads[e.squad].n : e.squad, e.status, e.paid ? "yes" : "no", e.createdAt, e.updatedAt]); });
+  return rows.map(function(r){ return r.map(q).join(","); }).join("\r\n") + "\r\n";
+}
+/* ===================== Shooter registration – organiser side (main phone) =====================
+   Create a registration (match, divisions, squads with slot limits, closing time) → public link + QR to register.html?m=CODE.
+   Live entry list (paid tick, remove/restore), close/reopen, CSV export, import into this match's shooter list (like a PractiScore CSV). */
+var REG_KEY = "spectreScoring.reg", REG_CATS = "Open, Lady, Junior, Senior, Super Senior";
+var REG = { code: "" }, REGRT = { reg: null, entries: [], unsub: [], err: "", code: "" };
+function regLoad(){ try{ Object.assign(REG, JSON.parse(localStorage.getItem(REG_KEY) || "{}")); }catch(e){} }
+function regSave(){ try{ localStorage.setItem(REG_KEY, JSON.stringify(REG)); }catch(e){} }
+function regLink(code){ return new URL("register.html?m=" + code, location.href.split("#")[0]).href; }
+function regT(){ return syncTransport().then(function(t){ if(!t.F) throw new Error("Registration needs the Firebase live connection."); return t.signIn().then(function(uid){ t.myUid = uid; return t; }); }); }
+function regWatch(){
+  if(!REG.code || REGRT.code === REG.code && REGRT.unsub.length) return;
+  regUnwatch(); REGRT.code = REG.code;
+  regT().then(function(t){ var F = t.F, db = t.db, code = REG.code;
+    REGRT.unsub.push(F.onSnapshot(F.doc(db, "regs", code), function(d){ REGRT.reg = d.exists() ? d.data() : null; regPaint(); }, regErr));
+    REGRT.unsub.push(F.onSnapshot(F.collection(db, "regs", code, "entries"), function(q){ REGRT.entries = q.docs.map(function(d){ var e = d.data(); e.tok = d.id; return e; }); regPaint(); }, regErr));
+  }).catch(regErr);
+}
+function regUnwatch(){ REGRT.unsub.forEach(function(u){ try{ u(); }catch(e){} }); REGRT.unsub = []; REGRT.code = ""; }
+function regErr(e){ REGRT.err = (e && e.message) || String(e); regPaint(); }
+function regEntriesSorted(){ var r = REGRT.reg; return REGRT.entries.slice().sort(function(a, b){ return (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1) || String(a.squad).localeCompare(String(b.squad), undefined, { numeric: true }) || (a.last + a.first).localeCompare(b.last + b.first); }); }
+function regFmt(ms){ var d = new Date(ms); return isNaN(d) ? "" : d.toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" }) + " " + d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" }); }
+function regInner(){
+  if(!syncConfigured()) return '<p class="small muted">Needs the Firebase project (same as live sync).</p>';
+  if(!REG.code) return '<p class="small muted">Shooters register online with one link or QR code: name, member number, division, power factor, class, category and squad. Squads lock when full; entries close at the deadline. Then import them here as shooters.</p><button type="button" class="wide primary" id="regNewB">Create a registration…</button><button type="button" class="wide" style="margin-top:8px" id="regOpenB">Open an existing one by code…</button>';
+  var r = REGRT.reg; if(!r) return '<p class="small">Registration <b>' + esc(REG.code) + '</b> · ' + (REGRT.err ? '<span class="muted">' + esc(REGRT.err) + '</span>' : "loading…") + '</p><button type="button" class="wide" id="regForgetB">Forget on this phone</button>';
+  var act = REGRT.entries.filter(function(e){ return e.status === "active"; }), open = regIsOpen(r), cap = 0, link = regLink(REG.code);
+  var sq = regSquadIds(r).map(function(id){ var n = act.filter(function(e){ return e.squad === id; }).length; cap += r.squads[id].max; return '<li>' + esc(r.squads[id].n) + ': <b>' + n + '/' + r.squads[id].max + '</b>' + (n >= r.squads[id].max ? " · full" : "") + '</li>'; }).join("");
+  var h = '<div><b>' + esc(r.name) + '</b> · ' + esc(r.date) + ' · code ' + esc(REG.code) + '</div>' +
+    '<div class="small" style="margin:6px 0">' + (open ? '<b style="color:#2a8a3a">Open</b> until ' + esc(regFmt(r.closesMs)) : '<b style="color:#b33">Closed</b>' + (r.closed ? " (closed by you)" : " (deadline " + esc(regFmt(r.closesMs)) + ")")) + ' · ' + act.length + '/' + cap + ' entered · ' + act.filter(function(e){ return e.paid; }).length + ' paid' + (REGRT.err ? '<br><span class="muted">' + esc(REGRT.err) + '</span>' : "") + '</div>' +
+    '<div class="syncqr" id="regQR"></div><input id="regLinkI" readonly value="' + esc(link) + '" style="font-size:13px"><div class="grid2" style="margin-top:6px"><button type="button" id="regCopyB">Copy link</button><button type="button" id="regShareB">Share link</button></div>' +
+    '<ul class="list-plain small" style="margin-top:8px">' + sq + '</ul>' +
+    '<div class="grid2" style="margin-top:8px"><button type="button" id="regCloseB">' + (r.closed ? "Reopen" : "Close now") + '</button><button type="button" id="regEditB">Edit…</button></div>' +
+    '<div class="grid2" style="margin-top:8px"><button type="button" id="regCsvB"' + (REGRT.entries.length ? "" : " disabled") + '>Export CSV</button><button type="button" class="primary" id="regImpB"' + (act.length ? "" : " disabled") + '>Import as shooters</button></div>' +
+    '<details style="margin-top:10px"' + (REG.openList ? " open" : "") + ' id="regListD"><summary>Entries (' + REGRT.entries.length + ')</summary><ul class="list-plain small">' +
+    regEntriesSorted().map(function(e){ var gone = e.status !== "active";
+      return '<li class="row" style="' + (gone ? "opacity:.55" : "") + '"><span class="grow"><b>' + esc(e.first + " " + e.last) + '</b>' + (gone ? " · " + esc(e.status) : "") + '<br>' + esc([r.squads[e.squad] ? r.squads[e.squad].n : e.squad, e.division, e.pf, e.cls, e.cat, e.member].filter(Boolean).join(" · ")) + (e.email ? '<br><span class="muted">' + esc(e.email) + '</span>' : "") + '</span>' +
+        (gone ? (e.status === "removed" ? '<button type="button" class="slim" data-regrestore="' + e.tok + '">Restore</button>' : "") : '<label class="agree' + (e.paid ? " on" : "") + '" style="margin:0 6px 0 0"><input type="checkbox" data-regpaid="' + e.tok + '"' + (e.paid ? " checked" : "") + '> Paid</label><button type="button" class="slim danger" data-regdel="' + e.tok + '">Remove</button>') + '</li>'; }).join("") + '</ul></details>' +
+    '<button type="button" class="wide" style="margin-top:10px" id="regForgetB">Forget on this phone</button><p class="small muted">Forgetting only removes it from this phone; the registration stays online. Keep the code ' + esc(REG.code) + ' to reopen it here.</p>';
+  return h;
+}
+function regCard(){ return S.role === "ro" ? "" : '<div class="card"><h3>Shooter registration</h3><div id="regBox">' + regInner() + '</div></div>'; }
+function regPaint(){ var b = document.getElementById("regBox"); if(b){ var open = document.getElementById("regListD"); if(open) REG.openList = open.open; b.innerHTML = regInner(); regDrawQR(); } }
+function regDrawQR(){ var q = document.getElementById("regQR"); if(q && REG.code){ try{ q.innerHTML = qrSVG(regLink(REG.code)); }catch(e){ q.textContent = ""; } } }
+function regBind(){
+  var box = $("regBox"); if(!box) return; regDrawQR(); if(REG.code) regWatch();
+  box.onchange = function(e){ var c = e.target; if(c.dataset.regpaid) regOrgSet(c.dataset.regpaid, { paid: c.checked }); if(c.id === "regListD"){ REG.openList = c.open; } };
+  box.onclick = function(e){ var b = e.target.closest("button"); if(!b) return;
+    if(b.id === "regNewB") regForm(null);
+    if(b.id === "regOpenB") ask("Registration code", { input: true, required: true, ok: "Open" }).then(function(v){ if(v){ regOpenCode(v); regPaint(); } });
+    if(b.id === "regEditB") regForm(REGRT.reg);
+    if(b.id === "regCopyB"){ var i = $("regLinkI"); i.select(); (navigator.clipboard ? navigator.clipboard.writeText(i.value) : Promise.reject()).then(function(){ toast("Link copied"); }, function(){ document.execCommand && document.execCommand("copy"); toast("Link copied"); }); }
+    if(b.id === "regShareB"){ var l = regLink(REG.code); if(navigator.share) navigator.share({ title: REGRT.reg.name + " – registration", url: l }).catch(function(){}); else { $("regLinkI").select(); toast("Copy the link"); } }
+    if(b.id === "regCloseB") regUpdate({ closed: !REGRT.reg.closed }).then(function(){ toast(REGRT.reg && REGRT.reg.closed ? "Registration reopened" : "Registration closed"); });
+    if(b.id === "regCsvB") shareOrDownload(slugify(REGRT.reg.name) + "-registrations.csv", regCSV(REGRT.reg, regEntriesSorted()), "text/csv");
+    if(b.id === "regImpB") regImport();
+    if(b.dataset.regdel){ var en = REGRT.entries.filter(function(x){ return x.tok === b.dataset.regdel; })[0]; ask("Remove " + esc(en.first + " " + en.last) + " from the registration? Their squad slot is freed (you can restore them).", { ok: "Remove", okClass: "danger" }).then(function(ok){ if(ok) regOrgSet(en.tok, { status: "removed" }); }); }
+    if(b.dataset.regrestore) regOrgSet(b.dataset.regrestore, { status: "active" });
+    if(b.id === "regForgetB") ask("Forget registration " + REG.code + " on this phone? It stays online.", { ok: "Forget" }).then(function(ok){ if(ok){ regUnwatch(); REG = { code: "" }; REGRT.reg = null; REGRT.entries = []; regSave(); regPaint(); } });
+  };
+}
+function regOrgSet(tok, patch){ return regT().then(function(t){ return regSaveEntry(t.F, t.db, REG.code, tok, patch, t.myUid, true); }).catch(function(e){ alertMsg(e.message); regPaint(); }); }
+function regUpdate(patch){ return regT().then(function(t){ return t.F.setDoc(t.F.doc(t.db, "regs", REG.code), Object.assign({}, REGRT.reg, patch, { updatedAt: regNowISO() })); }).catch(function(e){ alertMsg(e.message); }); }
+/* registration → shooters (same model as a PractiScore CSV import: first, last, member, cls/clsText, squad, cat, email) */
+function regToShooters(reg, entries){
+  return entries.filter(function(e){ return e.status === "active"; }).map(function(e){
+    var code = classCode(e.division); return { first: e.first, last: e.last, member: e.member, cls: code, clsText: code ? "" : e.division, squad: reg.squads[e.squad] ? reg.squads[e.squad].n.replace(/^Squad\s*/i, "") : "", cat: e.cat, email: e.email, no: null, pf: e.pf, grade: e.cls };
+  });
+}
+function regImport(){
+  var list = regToShooters(REGRT.reg, REGRT.entries), gone = REGRT.entries.filter(function(e){ return e.status !== "active" && S.shooters.some(function(s){ return sameShooter(s, e); }); });
+  var r = addShooters(list); saveState(); render();
+  alertMsg("Registrations imported: " + r.added + " new shooter(s), " + r.updated + " updated." + (gone.length ? " Note: " + gone.length + " cancelled/removed entr" + (gone.length > 1 ? "ies are" : "y is") + " still in the shooter list (" + gone.map(function(e){ return e.first + " " + e.last; }).join(", ") + ") – delete them on the Shooters tab if needed." : ""));
+}
+function regLocalDT(ms){ var d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); }
+function regForm(r){
+  var o = $("overlay"), edit = !!r, used = {};
+  if(edit) REGRT.entries.forEach(function(e){ if(e.status === "active") used[e.squad] = (used[e.squad] || 0) + 1; });
+  var divs = edit ? r.divisions.map(regDivCode) : CLASSES.filter(function(c){ return S.stages.length ? S.stages.some(function(st){ return (st.firearms || []).some(function(f){ return FIREARMS[f] && FIREARMS[f].groups.indexOf(c.g) >= 0; }); }) : c.g === "pistol"; }).map(function(c){ return c.c; });
+  if(!divs.length) divs = CLASSES.filter(function(c){ return c.g === "pistol"; }).map(function(c){ return c.c; });
+  var sqTxt = edit ? regSquadIds(r).map(function(id){ return r.squads[id].n + ": " + r.squads[id].max; }).join("\n") : "Squad 1: 10\nSquad 2: 10\nSquad 3: 10";
+  var md = S.match.date || "", close = edit ? regLocalDT(r.closesMs) : (md ? md + "T18:00" : regLocalDT(Date.now() + 7 * 864e5).slice(0, 11) + "18:00");
+  if(!edit && md){ var dd = new Date(md + "T18:00"); dd.setDate(dd.getDate() - 1); close = regLocalDT(dd.getTime()); }
+  o.innerHTML = '<h2>' + (edit ? "Edit registration " + esc(REG.code) : "New shooter registration") + '</h2>' +
+    '<label>Match name</label><input id="rgName" maxlength="120" value="' + esc(edit ? r.name : S.match.name) + '"><div class="grid2"><div><label>Date</label><input id="rgDate" type="date" value="' + esc(edit ? r.date : md) + '"></div><div><label>Venue</label><input id="rgVenue" maxlength="120" value="' + esc(edit ? r.venue : S.match.venue || "") + '"></div></div>' +
+    '<label>Registration closes</label><input id="rgClose" type="datetime-local" value="' + esc(close) + '">' +
+    '<label>Divisions shooters can choose</label><div class="small" style="columns:2">' + CLASSES.map(function(c){ return '<label style="display:block"><input type="checkbox" data-rgdiv="' + c.c + '"' + (divs.indexOf(c.c) >= 0 ? " checked" : "") + '> ' + c.c + '</label>'; }).join("") + '</div>' +
+    '<label>Squads and slots (one per line, "name: slots")</label><textarea id="rgSq" rows="5" style="width:100%">' + esc(sqTxt) + '</textarea>' + (edit ? '<p class="small muted">Existing squads keep their entries; a squad with entries cannot be removed or set below its entries.</p>' : "") +
+    '<label>Classes (optional, comma separated – leave empty to hide)</label><input id="rgCls" value="' + esc(edit ? r.classes.join(", ") : "") + '" placeholder="e.g. A, B, C, D, U">' +
+    '<label>Categories (comma separated)</label><input id="rgCats" value="' + esc(edit ? r.cats.join(", ") : REG_CATS) + '">' +
+    '<label>Note shown to shooters (optional)</label><textarea id="rgNote" rows="2" maxlength="1000" style="width:100%">' + esc(edit ? r.note : "") + '</textarea>' +
+    '<div class="grid2" style="margin-top:12px"><button type="button" id="rgCancel">Cancel</button><button type="button" class="primary" id="rgSave">' + (edit ? "Save" : "Create") + '</button></div>';
+  o.hidden = false; window.scrollTo(0, 0);
+  $("rgCancel").onclick = function(){ o.hidden = true; o.innerHTML = ""; };
+  $("rgSave").onclick = function(){
+    var list = function(v){ return v.split(",").map(function(x){ return x.trim().slice(0, 40); }).filter(Boolean).slice(0, 20); };
+    var dv = Array.prototype.filter.call(o.querySelectorAll("[data-rgdiv]"), function(c){ return c.checked; }).map(function(c){ return c.dataset.rgdiv + " – " + CLS[c.dataset.rgdiv].n; });
+    var closesMs = new Date($("rgClose").value).getTime(), name = $("rgName").value.trim();
+    if(!name) return alertMsg("Enter the match name."); if(!dv.length) return alertMsg("Tick at least one division."); if(isNaN(closesMs)) return alertMsg("Set the closing date and time.");
+    var squads = {}, err = "", byName = {}; if(edit) regSquadIds(r).forEach(function(id){ byName[r.squads[id].n.toLowerCase()] = id; });
+    var next = edit ? regSquadIds(r).reduce(function(m, id){ return Math.max(m, parseInt(id.slice(1), 10) || 0); }, 0) : 0;
+    $("rgSq").value.split(/\r?\n/).forEach(function(line){ line = line.trim(); if(!line) return; var m = line.match(/^(.*?)[:=\s]\s*(\d+)$/); if(!m){ err = err || 'Squad line "' + line + '" needs a slot number, e.g. "Squad 1: 10".'; return; }
+      var n = m[1].trim().replace(/[:=]$/, "").slice(0, 40) || "Squad", max = Math.min(200, parseInt(m[2], 10)), id = byName[n.toLowerCase()] || ("S" + (++next));
+      if(used[id] && max < used[id]) err = err || n + " already has " + used[id] + " entries."; squads[id] = { n: n, max: max }; });
+    if(edit) Object.keys(used).forEach(function(id){ if(!squads[id]) err = err || r.squads[id].n + " has entries and cannot be removed."; });
+    if(!Object.keys(squads).length) err = err || "Add at least one squad.";
+    if(Object.keys(squads).length > 40) err = "At most 40 squads.";
+    if(err) return alertMsg(err);
+    var body = { name: name, date: $("rgDate").value, venue: $("rgVenue").value.trim(), divisions: dv, classes: list($("rgCls").value), cats: list($("rgCats").value), squads: squads, closesMs: closesMs, note: $("rgNote").value.trim().slice(0, 1000), updatedAt: regNowISO(), v: 1 };
+    var job = edit ? regCreateOrUpdate(REG.code, Object.assign({}, r, body), Object.keys(squads).filter(function(id){ return !r.squads[id]; })) : regCreate(body);
+    job.then(function(code){ o.hidden = true; o.innerHTML = ""; toast(edit ? "Registration saved" : "Registration " + code + " created"); render(); }).catch(function(e){ alertMsg(e.message); });
+  };
+}
+function regCreateOrUpdate(code, data, newSquads){
+  return regT().then(function(t){ var F = t.F, b = F.writeBatch(t.db);
+    b.set(F.doc(t.db, "regs", code), data); newSquads.forEach(function(id){ b.set(F.doc(t.db, "regs", code, "counts", id), { n: 0, last: "" }); });
+    return b.commit().then(function(){ return code; }); });
+}
+function regCreate(body, code){
+  code = code || syncNewCode();
+  return regT().then(function(t){ return t.F.getDoc(t.F.doc(t.db, "regs", code)).then(function(d){ if(d.exists()) throw new Error("Code clash – try again.");
+    var data = Object.assign({ code: code, closed: false, createdBy: t.myUid, createdAt: regNowISO() }, body);
+    /* batch: rules see the registration doc (getAfter is not used for counts create, so create the reg first) */
+    return t.F.setDoc(t.F.doc(t.db, "regs", code), data).then(function(){ return regCreateOrUpdate(code, data, Object.keys(data.squads)); });
+  }).then(function(){ REG = { code: code }; regSave(); REGRT.reg = null; REGRT.entries = []; regUnwatch(); regWatch(); return code; }); });
+}
+function regOpenCode(code){ code = syncCleanCode(code); if(!code) return; regUnwatch(); REG = { code: code }; regSave(); regWatch(); }
 /* ===================== start-up and events ===================== */
 function onClick(e){
   var b = e.target.closest("button,[data-act]"); if(!b) return;
@@ -2617,13 +2784,13 @@ function boot(){
   $("fileAny").onchange = function(){ var f = this.files && this.files[0], inp = this; if(!f) return; var rd = new FileReader(); rd.onload = function(){ inp.value = ""; importFileText(String(rd.result || ""), f.name); }; rd.readAsText(f); };
   /* resume an unfinished entry after a reload */
   try{ var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); if(d && stageById(d.stage) && shooterById(d.shooter) && d.draft){ U.stage = d.stage; U.shooter = d.shooter; U.draft = d.draft; U.editing = d.editing; U.screen = d.screen === "confirm" ? "confirm" : "entry"; U.tab = "score"; } }catch(e){}
-  syncBoot();
+  syncBoot(); regLoad();
   sigOpen().then(function(){ render(); });
   render();
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later" }).then(function(v){ if(v && v.trim()){ S.device.name = v.trim(); saveState(); render(); } }); }, 300);
   if("serviceWorker" in navigator && location.protocol !== "file:") setupUpdates();
 }
-window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; } };
+window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, reg: { get state(){ return REG; }, rt: REGRT, create: regCreate, open: regOpenCode, toShooters: regToShooters, importNow: regImport, set: regOrgSet, update: regUpdate }, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; } };
 document.addEventListener("DOMContentLoaded", boot);
 
 /* updates: a new version (new sw.js build hash) installs in the background; the user is told and reloads when ready */

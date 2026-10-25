@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Spectre – Shooter registration</title>
+<meta name="theme-color" content="#14284b">
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<style>
+*{box-sizing:border-box}body{margin:0;font:16px/1.4 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:#eef1f6;color:#1a2233}
+header{background:#14284b;color:#fff;padding:14px 16px;font-size:18px}header b{letter-spacing:.08em}
+main{max-width:560px;margin:0 auto;padding:12px}
+.card{background:#fff;border-radius:12px;padding:14px 16px;margin:10px 0;box-shadow:0 1px 3px #0002}
+h1{font-size:21px;margin:0 0 4px}h2{font-size:17px;margin:0 0 8px}
+label{display:block;font-weight:600;font-size:14px;margin:10px 0 3px}
+input,select{width:100%;font:inherit;padding:10px;border:1px solid #b9c2d3;border-radius:8px;background:#fff}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{font:inherit;padding:12px;border-radius:8px;border:1px solid #b9c2d3;background:#fff;width:100%;cursor:pointer}
+button.primary{background:#14284b;color:#fff;border-color:#14284b;font-weight:600}button.danger{color:#b32020;border-color:#e2a0a0}
+button:disabled{opacity:.5}
+.sq{display:flex;align-items:center;gap:10px;border:1px solid #c9d1df;border-radius:8px;padding:10px;margin:6px 0;font-weight:400}
+.sq input{width:auto}.sq .left{margin-left:auto;font-size:14px}.sq.full{opacity:.5}.sq.on{border-color:#14284b;background:#eef3ff}
+.muted{color:#5d6780}.small{font-size:14px}.msg{padding:10px 12px;border-radius:8px;margin:8px 0}.ok{background:#e3f5e6}.warn{background:#fff3d6}.err{background:#fde2e2}
+.seg{display:flex;gap:8px}.seg label{flex:1;border:1px solid #c9d1df;border-radius:8px;padding:10px;margin:0;font-weight:400;text-align:center}.seg input{width:auto}
+code{word-break:break-all;background:#eef1f6;padding:2px 4px;border-radius:4px}
+</style>
+</head>
+<body>
+<header><b>SPECTRE</b> Shooter registration</header>
+<main id="app"><div class="card">Loading…</div></main>
+<script>
+/* ===================== FIREBASE CONFIG – FILL IN HERE =====================
+   Live sync is optional. Filled in 24 Oct 2026 for project spectre-scoring-5ddda (Firestore africa-south1). If they are ever cleared/placeholdered
+   (Firebase console → Project settings → Your apps → Web app → SDK setup → Config),
+   the "Live sync" switch stays disabled and the app works exactly as before.
+   Only apiKey, authDomain, projectId and appId are used. These values are not secret;
+   access is controlled by firestore.rules + Anonymous Auth.                          */
+var SS_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBxXZ-OuYOYHf-QDnH9k0Gr28bnI5t0T-w",
+  authDomain: "spectre-scoring-5ddda.firebaseapp.com",
+  projectId: "spectre-scoring-5ddda",
+  appId: "1:318620464890:web:568f4a9f1ed9408f1afb43"
+};
+var SS_FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.14.1/"; /* modular ESM, loaded only when live sync is switched on */
+/* ========================================================================== */
+
+/* ===================== Shooter registration – shared by the scoring app (organiser) and register.html (shooters) =====================
+   regs/{CODE}                 match registration (name, date, divisions, squads {id:{n,max}}, closesMs, closed) – no personal data
+   regs/{CODE}/counts/{squad}  public squad counters {n, last}
+   regs/{CODE}/entries/{TOKEN} one entry; the 24-character random id is the shooter's private edit token
+   Every entry change runs in a transaction together with the squad counter(s) it moves, so a full squad can never be overfilled. */
+var REG_TOKEN_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+function regToken(){ var s = "", r = new Uint32Array(24); crypto.getRandomValues(r); for(var i = 0; i < 24; i++) s += REG_TOKEN_CHARS[r[i] % REG_TOKEN_CHARS.length]; return s; }
+function regCleanTok(t){ t = String(t || ""); return /^[A-Za-z0-9]{24}$/.test(t) ? t : ""; }
+function regSquadIds(reg){ return Object.keys(reg && reg.squads || {}).sort(function(a, b){ return a.localeCompare(b, undefined, { numeric: true }); }); }
+function regIsOpen(reg, now){ return !!reg && !reg.closed && (now || Date.now()) < reg.closesMs; }
+function regDivCode(d){ return String(d || "").split(" – ")[0].trim(); }
+function regNowISO(){ return new Date().toISOString(); }
+/* save (create / edit / cancel / re-enter / organiser paid-remove) an entry. patch = fields to change. Resolves to the saved entry. */
+function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
+  var regRef = F.doc(db, "regs", code), entRef = F.doc(db, "regs", code, "entries", tok), cnt = function(sq){ return F.doc(db, "regs", code, "counts", sq); };
+  return F.runTransaction(db, function(tx){
+    return Promise.all([tx.get(regRef), tx.get(entRef)]).then(function(r){
+      if(!r[0].exists()) throw new Error("This registration does not exist.");
+      var reg = r[0].data(), o = r[1].exists() ? r[1].data() : null, now = regNowISO();
+      if(!asOrg && !regIsOpen(reg)) throw new Error("Registration is closed.");
+      var d = Object.assign({}, o || { first: "", last: "", member: "", email: "", division: "", pf: "minor", cls: "", cat: "", squad: "", status: "active", paid: false, createdAt: now }, patch);
+      if(!asOrg) d.uid = uid; d.updatedAt = now; if(!o){ d.paid = false; d.status = "active"; }
+      if(!reg.squads[d.squad]) throw new Error("Choose a squad.");
+      var wasA = !!o && o.status === "active", isA = d.status === "active", same = wasA && isA && o.squad === d.squad;
+      var leave = wasA && !same ? o.squad : "", join = isA && !same ? d.squad : "";
+      return Promise.all([leave ? tx.get(cnt(leave)) : null, join ? tx.get(cnt(join)) : null]).then(function(c){
+        if(join){ var n = c[1] && c[1].exists() ? c[1].data().n : 0; if(n >= reg.squads[join].max) throw new Error("Squad " + reg.squads[join].n + " is full – choose another squad."); tx.set(cnt(join), { n: n + 1, last: tok }); }
+        if(leave){ var m = c[0] && c[0].exists() ? c[0].data().n : 1; tx.set(cnt(leave), { n: Math.max(0, m - 1), last: tok }); }
+        tx.set(entRef, d); return d;
+      });
+    });
+  });
+}
+function regCSV(reg, entries){
+  var q = function(v){ v = String(v == null ? "" : v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  var rows = [["First Name","Last Name","Member #","Email","Division","Power Factor","Class","Category","Squad","Status","Paid","Registered","Updated"]];
+  entries.forEach(function(e){ rows.push([e.first, e.last, e.member, e.email, e.division, e.pf, e.cls, e.cat, reg.squads[e.squad] ? reg.squads[e.squad].n : e.squad, e.status, e.paid ? "yes" : "no", e.createdAt, e.updatedAt]); });
+  return rows.map(function(r){ return r.map(q).join(","); }).join("\r\n") + "\r\n";
+}
+
+(function(){
+  var P = new URLSearchParams(location.search), code = (P.get("m") || "").toUpperCase().replace(/[^A-Z0-9]/g, ""), tok = regCleanTok(P.get("t"));
+  var KEY = "spectreReg." + code, app = document.getElementById("app"), F, db, auth, uid = "", reg = null, counts = {}, mine = null, msg = "", busy = false;
+  var esc = function(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+  var fmt = function(ms){ var d = new Date(ms); return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) + " " + d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" }); };
+  if(!tok){ try{ tok = regCleanTok(localStorage.getItem(KEY)); }catch(e){} }
+  var editLink = function(){ return location.origin + location.pathname + "?m=" + code + "&t=" + tok; };
+  function fail(t){ app.innerHTML = '<div class="card msg err">' + esc(t) + '</div>'; }
+  if(!/^[A-Z0-9]{6,8}$/.test(code)) return fail("This registration link is incomplete. Ask the match organiser for the link.");
+  var cfg = window.SS_FIREBASE_TEST || window.SS_FIREBASE_CONFIG, base = window.SS_FIREBASE_SDK;
+  Promise.all([import(base + "firebase-app.js"), import(base + "firebase-auth.js"), import(base + "firebase-firestore.js")]).then(function(m){
+    var app0 = m[0].initializeApp(cfg); auth = m[1].getAuth(app0); F = m[2]; db = F.getFirestore(app0);
+    if(cfg.emulator){ m[1].connectAuthEmulator(auth, "http://" + cfg.emulator + ":9099", { disableWarnings: true }); F.connectFirestoreEmulator(db, cfg.emulator, 8085); }
+    return (auth.currentUser ? Promise.resolve(auth.currentUser) : m[1].signInAnonymously(auth).then(function(c){ return c.user; }));
+  }).then(function(u){ uid = u.uid;
+    F.onSnapshot(F.doc(db, "regs", code), function(d){ reg = d.exists() ? d.data() : null; if(!reg) return fail("No registration " + code + ". Check the link with the match organiser."); paint(); }, function(e){ fail("Could not load the registration: " + e.message); });
+    F.onSnapshot(F.collection(db, "regs", code, "counts"), function(q){ counts = {}; q.docs.forEach(function(d){ counts[d.id] = d.data().n; }); paint(); }, function(){});
+    if(tok) return F.getDoc(F.doc(db, "regs", code, "entries", tok)).then(function(d){ mine = d.exists() ? d.data() : null; if(!mine) tok = ""; paint(); });
+  }).catch(function(e){ fail("Could not connect (" + (e && e.message || e) + "). Check your signal and reload."); });
+  window.SSREG = { get state(){ return { reg: reg, counts: counts, mine: mine, tok: tok, msg: msg, uid: uid }; } };
+
+  function val(id){ var e = document.getElementById(id); return e ? e.value.trim() : ""; }
+  function paint(){
+    if(!reg || busy) return;
+    var open = regIsOpen(reg), ids = regSquadIds(reg), act = mine && mine.status === "active", f = mine || {};
+    var h = '<div class="card"><h1>' + esc(reg.name) + '</h1><div class="muted">' + esc([reg.date, reg.venue].filter(Boolean).join(" · ")) + '</div>' +
+      '<div class="small" style="margin-top:6px">' + (open ? 'Registration closes <b>' + esc(fmt(reg.closesMs)) + '</b>' : '<b>Registration is closed.</b>') + '</div>' + (reg.note ? '<div class="small" style="margin-top:8px;white-space:pre-wrap">' + esc(reg.note) + '</div>' : "") + '</div>';
+    if(msg) h += '<div class="card msg ' + (msg.k || "ok") + '">' + msg.h + '</div>';
+    if(mine){
+      var sqn = reg.squads[mine.squad] ? reg.squads[mine.squad].n : "";
+      h += '<div class="card"><h2>Your entry</h2>' + (act ? '<div><b>' + esc(mine.first + " " + mine.last) + '</b> · ' + esc(sqn) + ' · ' + esc(regDivCode(mine.division)) + ' ' + esc(mine.pf) + '</div>' : '<div class="msg warn">' + (mine.status === "removed" ? "The organiser removed this entry. Contact them if this is a mistake." : "You cancelled this entry.") + '</div>') +
+        '<p class="small">Private edit link – keep it to change or cancel your entry until registration closes (do not share it):<br><code id="editLink">' + esc(editLink()) + '</code></p><button type="button" id="copyB">Copy my edit link</button></div>';
+    }
+    var canEdit = open && (!mine || mine.status !== "removed");
+    if(canEdit){
+      var divOpts = reg.divisions.map(function(d){ var c = regDivCode(d); return '<option value="' + esc(c) + '"' + (f.division === c ? " selected" : "") + '>' + esc(d) + '</option>'; }).join("");
+      var opts = function(list, cur){ return '<option value="">– choose –</option>' + list.map(function(x){ return '<option' + (cur === x ? " selected" : "") + '>' + esc(x) + '</option>'; }).join(""); };
+      h += '<div class="card"><h2>' + (mine ? (act ? "Change your entry" : "Enter again") : "Enter this match") + '</h2>' +
+        '<div class="grid2"><div><label for="rFirst">Name</label><input id="rFirst" maxlength="60" autocomplete="given-name" value="' + esc(f.first) + '"></div><div><label for="rLast">Surname</label><input id="rLast" maxlength="60" autocomplete="family-name" value="' + esc(f.last) + '"></div></div>' +
+        '<label for="rMember">SAPSA / IPSC member number</label><input id="rMember" maxlength="40" value="' + esc(f.member) + '">' +
+        '<label for="rEmail">Email (optional – only the organiser sees it)</label><input id="rEmail" type="email" maxlength="120" autocomplete="email" value="' + esc(f.email) + '">' +
+        '<label for="rDiv">Division</label><select id="rDiv"><option value="">– choose –</option>' + divOpts + '</select>' +
+        '<label>Power factor</label><div class="seg"><label><input type="radio" name="rPf" value="minor"' + (f.pf !== "major" ? " checked" : "") + '> Minor</label><label><input type="radio" name="rPf" value="major"' + (f.pf === "major" ? " checked" : "") + '> Major</label></div>' +
+        (reg.classes.length ? '<label for="rCls">Class</label><select id="rCls">' + opts(reg.classes, f.cls) + '</select>' : "") +
+        (reg.cats.length ? '<label for="rCat">Category</label><select id="rCat">' + opts(reg.cats, f.cat) + '</select>' : "") +
+        '<label>Squad</label>' + ids.map(function(id){ var s = reg.squads[id], n = counts[id] || 0, own = act && mine.squad === id, left = s.max - n, full = left <= 0 && !own;
+          return '<label class="sq' + (full ? " full" : "") + (f.squad === id ? " on" : "") + '"><input type="radio" name="rSq" value="' + id + '"' + (full ? " disabled" : "") + (f.squad === id && !full ? " checked" : "") + '> ' + esc(s.n) + '<span class="left">' + (own ? "your squad · " : "") + (full ? "Full" : left + " of " + s.max + " left") + '</span></label>'; }).join("") +
+        '<button type="button" class="primary" id="saveB" style="margin-top:12px">' + (mine && act ? "Save changes" : "Register") + '</button>' +
+        (act ? '<button type="button" class="danger" id="cancelB" style="margin-top:8px">Cancel my entry</button>' : "") + '</div>';
+    }
+    app.innerHTML = h;
+    var c = document.getElementById("copyB"); if(c) c.onclick = function(){ (navigator.clipboard ? navigator.clipboard.writeText(editLink()) : Promise.reject()).then(function(){ c.textContent = "Copied"; }, function(){ c.textContent = "Select the link above and copy it"; }); };
+    var s = document.getElementById("saveB"); if(s) s.onclick = save;
+    var x = document.getElementById("cancelB"); if(x) x.onclick = function(){ if(confirm("Cancel your entry? Your squad slot is released.")) commit({ status: "cancelled" }, "Your entry is cancelled. You can enter again with your edit link until registration closes."); };
+    Array.prototype.forEach.call(document.querySelectorAll(".sq input"), function(r){ r.onchange = function(){ Array.prototype.forEach.call(document.querySelectorAll(".sq"), function(l){ l.classList.toggle("on", l.querySelector("input").checked); }); }; });
+  }
+  function save(){
+    var sq = document.querySelector('input[name="rSq"]:checked'), pf = document.querySelector('input[name="rPf"]:checked');
+    var d = { first: val("rFirst"), last: val("rLast"), member: val("rMember"), email: val("rEmail"), division: val("rDiv"), pf: pf ? pf.value : "minor", cls: val("rCls"), cat: val("rCat"), squad: sq ? sq.value : "", status: "active" };
+    var err = !d.first || !d.last ? "Enter your name and surname." : !d.division ? "Choose a division." : reg.classes.length && !d.cls ? "Choose a class." : reg.cats.length && !d.cat ? "Choose a category." : !d.squad ? "Choose a squad." : d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email) ? "Check the email address." : "";
+    if(err){ msg = { k: "err", h: esc(err) }; paint(); window.scrollTo(0, 0); return; }
+    var isNew = !mine; commit(d, isNew ? "You are registered! Save your private edit link below." : "Your entry is saved.");
+  }
+  function commit(patch, okText){
+    if(!tok) tok = regToken(); busy = true; var b = document.getElementById("saveB"); if(b){ b.disabled = true; b.textContent = "Saving…"; }
+    regSaveEntry(F, db, code, tok, patch, uid, false).then(function(d){ mine = d; try{ localStorage.setItem(KEY, tok); }catch(e){} msg = { k: "ok", h: esc(okText) }; history.replaceState(null, "", "?m=" + code + "&t=" + tok); })
+      .catch(function(e){ if(!mine) tok = ""; msg = { k: "err", h: esc(/permission/i.test(e.message) ? "Could not save – registration may have closed or the squad filled up. Reload and try again." : e.message) }; })
+      .then(function(){ busy = false; paint(); window.scrollTo(0, 0); });
+  }
+})();
+</script>
+</body>
+</html>

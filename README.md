@@ -5,6 +5,7 @@ Offline match-scoring app (PWA) for Spectre Tactical Shooting, the companion to 
 ## Files (host these as they are, e.g. on GitHub Pages in any sub-folder)
 - `index.html` – the whole app (all CSS and JS inline, ~350 KB, includes the QR libraries)
 - `sw.js` – service worker, caches everything for offline use (cache name changes with each build)
+- `register.html` – public shooter registration page (online only, opened from the organiser's link/QR)
 - `manifest.webmanifest`, `icons/` (180 px apple-touch-icon, 192, 512)
 
 `src/` is the source, `build.sh` rebuilds `index.html` and `sw.js`. `src/vendor/a-data.js`, `b-logic.js` and `c-svg.js` are exact copies of the Stage Designer's
@@ -54,3 +55,15 @@ data model, migration, hit requirements and SVG renderer (the designer itself is
 - Rules: `firestore.rules` (paste into Firebase console → Firestore → Rules). Tests: `t/test-sync.js` (mock), `t/test-rules.js` and
   `t/test-sync-emulator.js` (emulators: `npx firebase emulators:exec --project demo-spectre --only firestore,auth "node t/<test>"`, needs Java + /workspace/fbtools).
 - Limits: match pack < 900 KB, score < 60 KB, signature < 700 KB (bigger ones go by pack). Only the room creator merges; RO phones never merge scores.
+
+## Shooter registration (online, Firebase)
+- Main phone → Match tab → **Shooter registration**: match name, date, venue, divisions, class/category lists, squads with slot limits and a closing date/time.
+  Creates `regs/{CODE}` and shows the link `register.html?m=CODE` + QR to share.
+- Shooters open the link: name, surname, SAPSA/IPSC number, optional email, division, power factor, class, category, squad. Live slots per squad,
+  full squads locked, form closes at the deadline or when the organiser closes it. Each shooter gets a private edit link (`&t=TOKEN`) to change or cancel.
+- Organiser card: live entry list, tick paid, remove/restore, close/reopen, edit settings, CSV export, **Import into shooters** (same model as the
+  PractiScore CSV import, incl. squads; cancelled/removed entries are skipped).
+- Firestore: `regs/{CODE}` (organiser-only writes), `regs/{CODE}/counts/{squad}` (public slot counters, no personal data), `regs/{CODE}/entries/{token}`
+  (written only by the token holder or the organiser; only the organiser can list entries). Rules enforce slot limits, deadlines and field sizes.
+- Organiser rights belong to the anonymous Firebase login of the phone that created the registration – keep that phone/Home Screen app.
+- Tests: `t/test-rules-reg.js`, `t/test-reg-emulator.js` (emulators), `t/test-reg-live.js` (live project, TEST codes, needs the rules published).
