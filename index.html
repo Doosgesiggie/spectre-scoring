@@ -2998,7 +2998,10 @@ function moveSelected(){
 var INDEM = { rows: 10, lib: null,
   /* PDF user-space (page is rotated 90°; text drawn rotated so it reads across the landscape page) */
   rowX: function(i){ return 350 + i * 20.05 + 14; },
-  colY: { member: 33, name: 142 } };
+  colY: { member: 33, name: 142 },
+  /* checkbox centres (glyph squares measured with PyMuPDF): arrival 6, departure 4 – the club does all of these, so all pre-ticked */
+  boxX: [142.62, 156.17, 169.72, 183.27, 196.82, 210.37], arrY: 164.6, depY: 532.0, depN: 4,
+  timeIn: "09:00", timeOut: "16:30" };
 function indemLib(){
   if(window.PDFLib) return Promise.resolve(window.PDFLib);
   if(!INDEM.lib) INDEM.lib = new Promise(function(ok, no){ var s = document.createElement("script"); s.src = "indemnity-pdf.js"; s.onload = function(){ ok(window.PDFLib); }; s.onerror = function(){ INDEM.lib = null; no(new Error("Could not load the PDF maker – check the signal.")); }; document.head.appendChild(s); });
@@ -3030,6 +3033,12 @@ function indemBuild(reg, entries, perSquad, formBytes){
           cp.forEach(function(pg, i){
             out.addPage(pg); var p = pages[i];
             if(date){ pg.drawRectangle({ x: 93, y: 155, width: 18.5, height: 202, color: white }); t(pg, date, 106, 160, 10, 195); }
+            /* time in / out: white-out the HH:MM placeholders, write the defaults (match may override via reg.timeIn/timeOut) */
+            pg.drawRectangle({ x: 93, y: 533, width: 18.5, height: 220, color: white });
+            var tin = /^\d{2}:\d{2}$/.test(reg.timeIn || "") ? reg.timeIn : INDEM.timeIn, tout = /^\d{2}:\d{2}$/.test(reg.timeOut || "") ? reg.timeOut : INDEM.timeOut;
+            t(pg, tin, 106, 552, 10, 60); t(pg, "–".replace(/./, "-"), 106, 640, 10, 10); t(pg, tout, 106, 678, 10, 60);
+            function tick(cx, cy){ var h = 2.6, o = { thickness: 1.3, color: ink }; pg.drawLine(Object.assign({ start: { x: cx - h, y: cy - h }, end: { x: cx + h, y: cy + h } }, o)); pg.drawLine(Object.assign({ start: { x: cx - h, y: cy + h }, end: { x: cx + h, y: cy - h } }, o)); }
+            INDEM.boxX.forEach(function(x, k){ tick(x, INDEM.arrY); if(k < INDEM.depN) tick(x, INDEM.depY); });
             var rem = [reg.name, reg.venue, p.squad, "Sheet " + (i + 1) + " of " + pages.length].filter(Boolean).join("  ·  ");
             t(pg, rem, 233, 158, 9, 600);
             p.rows.forEach(function(r, k){ var x = INDEM.rowX(k); t(pg, r.member, x, INDEM.colY.member, 9, 48); t(pg, r.name, x, INDEM.colY.name, 10, 212); });
