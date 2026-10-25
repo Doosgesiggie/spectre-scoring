@@ -1335,12 +1335,15 @@ var COLMAP = [
   ["first", /^(first|first ?name|fname|given ?name|firstname)$/],
   ["last", /^(last|last ?name|lname|surname|family ?name|lastname)$/],
   ["full", /^(name|competitor|shooter|competitor ?name|full ?name)$/],
-  ["member", /^(member ?(#|no\.?|number|id)?|mem ?(#|no)|uspsa( ?#| ?number)?|ipsc ?(#|no|number)|idpa ?(#|no|number)|sapsa ?(#|no|number)|membership ?(#|no|number)?|member_number|memberno|id ?number)$/],
+  ["member", /^(member ?(#|no\.?|number|id)?|mem ?(#|no)|uspsa( ?#| ?number)?|ipsc ?(#|no|number)|idpa ?(#|no|number)|sapsa ?(#|no|number)|swpc ?(member ?)?(#|no|number)|membership ?(#|no|number)?|member_number|memberno|id ?number)$/],
+  ["d_handgun", /^(handgun|handgun ?division|hg)$/], ["pf_handgun", /^(handgun ?pf|hg ?pf|handgun ?power ?factor)$/],
+  ["d_shotgun", /^(shotgun|shotgun ?division|sg)$/], ["d_rifle", /^(rifle|rifle ?division)$/], ["pf_rifle", /^(rifle ?pf|rifle ?power ?factor)$/],
   ["division", /^(division|firearm ?class ?\/ ?division|firearm ?class|class ?\/ ?division|division ?\/ ?class|firearm)$/],
   ["cls", /^(class|classification)$/],
   ["squad", /^(squad|squad ?(#|no|number)|relay)$/],
   ["cat", /^(category|categories|age|age ?category|age ?group|cat)$/],
   ["email", /^(e-?mail|e-?mail ?address)$/],
+  ["visitor", /^(visitor|guest)$/],
   ["no", /^(no\.?|#|number|shooter ?(#|no)|comp ?#|competitor ?#)$/]
 ];
 function mapHeader(h){
@@ -1367,8 +1370,10 @@ function readShootersCSV(txt){
     var first = g("first"), last = g("last");
     if(!first && !last && g("full")){ var p = g("full").split(/\s+/); if(/,/.test(g("full"))){ var q = g("full").split(","); last = q[0].trim(); first = q.slice(1).join(",").trim(); } else { first = p[0]; last = p.slice(1).join(" "); } }
     if(!first && !last) return;
-    var div = g("division"), cl = g("cls"), code = classCode(div) || classCode(cl);
-    out.push({ first: first, last: last, member: g("member"), cls: code, clsText: code ? "" : (div || ""), squad: g("squad"), cat: g("cat"), email: g("email"), no: parseInt(g("no"), 10) || null });
+    var divs = {}; ["handgun","shotgun","rifle"].forEach(function(k){ var v = g("d_" + k); if(!v) return; var c = classCode(v); divs[k] = { c: c, t: c ? "" : v }; if(k !== "shotgun") divs[k].pf = /major/i.test(g("pf_" + k)) ? "major" : "minor"; });
+    var dk = Object.keys(divs)[0];
+    var div = g("division") || (dk ? (divs[dk].c || divs[dk].t) : ""), cl = g("cls"), code = classCode(div) || classCode(cl);
+    out.push({ divs: dk ? divs : undefined, first: first, last: last, member: g("member"), cls: code, clsText: code ? "" : (div || ""), squad: g("squad"), cat: g("cat"), email: g("email"), visitor: m.visitor === undefined ? undefined : /^(y|yes|true|1|x)$/i.test(g("visitor")), no: parseInt(g("no"), 10) || null });
   });
   if(!out.length) throw new Error("No shooters found in the CSV.");
   return out;
@@ -1381,12 +1386,26 @@ function addShooters(list){
   var added = 0, updated = 0;
   list.forEach(function(n){
     var ex = S.shooters.filter(function(s){ return sameShooter(s, n); })[0];
-    if(ex){ ["member","cls","clsText","squad","cat","email"].forEach(function(k){ if(n[k]) ex[k] = n[k]; }); if(n.no) ex.no = n.no; updated++; }
+    if(ex){ ["member","cls","clsText","squad","cat","email"].forEach(function(k){ if(n[k]) ex[k] = n[k]; }); if(n.visitor != null) ex.visitor = !!n.visitor; if(n.divs) ex.divs = n.divs; if(n.no) ex.no = n.no; updated++; }
     else { n.id = sid(); if(!n.no) n.no = S.shooters.reduce(function(mx, s){ return Math.max(mx, s.no || 0); }, 0) + 1; S.shooters.push(n); added++; }
   });
   return { added: added, updated: updated };
 }
 function clsLabel(sh){ return sh.cls || sh.clsText || "Unclassified"; }
+/* ---- disciplines: a shooter may carry one division per discipline (registration) in sh.divs = { handgun|shotgun|rifle: { c: code, t: text, pf: "minor"|"major" } }.
+   Stage firearms map onto disciplines: handgun → handgun, shotgun → shotgun, rifle / PCC / precision rifle → rifle.
+   Shooters without divs (CSV import, manual entry, older matches) use their single cls for every discipline, as before. */
+var DISCS = ["handgun", "shotgun", "rifle"], DISC_N = { handgun: "Handgun", shotgun: "Shotgun", rifle: "Rifle" }, DISC_PF = { handgun: true, rifle: true };
+function discOf(fa){ return fa === "handgun" || fa === "shotgun" ? fa : fa ? "rifle" : ""; }
+function discOfCls(code){ var c = CLS[code]; if(!c) return ""; return c.g === "pistol" || c.g === "revolver" ? "handgun" : c.g === "shotgun" ? "shotgun" : "rifle"; }
+function hasDivs(sh){ return !!(sh.divs && Object.keys(sh.divs).length); }
+function shDiv(sh, fa){ if(!hasDivs(sh) || !fa) return null; return sh.divs[discOf(fa)] || null; }
+/* division label for a firearm's stages; null = shooter not entered in that discipline */
+function divLabelFor(sh, fa){ if(!hasDivs(sh) || !fa) return clsLabel(sh); var d = shDiv(sh, fa); return d ? (d.c || d.t || "Unclassified") : null; }
+function pfFor(sh, fa){ var d = shDiv(sh, fa); return d ? (DISC_PF[discOf(fa)] ? d.pf || "minor" : "") : (sh.pf || ""); }
+function enteredFor(sh, fa){ return !fa || !hasDivs(sh) || !!shDiv(sh, fa); }
+function divsText(sh){ if(!hasDivs(sh)) return clsLabel(sh) + (sh.pf ? " " + sh.pf : "");
+  return DISCS.filter(function(k){ return sh.divs[k]; }).map(function(k){ var d = sh.divs[k]; return FIREARMS[k].short + " " + (d.c || d.t || "?") + (DISC_PF[k] && d.pf ? " " + d.pf : ""); }).join(" · "); }
 /* squad order: squad (numeric aware), then shooter number, then name */
 function squadSorted(list){
   return list.slice().sort(function(a, b){
@@ -1585,14 +1604,18 @@ function dqOf(shId){ var k = Object.keys(S.scores).filter(function(k){ return S.
 function isMatchDQ(shId){ return !!dqOf(shId); }
 function matchFirearms(){ var u = {}; S.stages.forEach(function(st){ usedFirearmTypes(st).forEach(function(f){ u[f] = 1; }); }); return FA_ORDER.filter(function(f){ return u[f]; }); }
 function isMultiGun(){ return S.stages.some(function(st){ return stageRanking(st) === "open"; }) || matchFirearms().length > 1; }
-function stageOpen(st){ return isMultiGun() || stageRanking(st) === "open"; }
-function groupsFor(list, open){ var g = {}; list.forEach(function(sh){ var k = open ? "Open" : clsLabel(sh); (g[k] = g[k] || []).push(sh); }); return g; }
+function stageOpen(st){ return (isMultiGun() && !(rankByDiv() && stageFirearm(st))) || stageRanking(st) === "open"; }
+function stageFirearm(st){ var u = usedFirearmTypes(st); return u.length === 1 ? u[0] : null; }
+function matchFirearm(){ var f = matchFirearms(); return f.length === 1 ? f[0] : null; }
+/* groups: open → "Open"; else by the shooter's division for that firearm (sh.divs) or their class. Shooters not entered in the firearm's discipline are left out. */
+function rankByDiv(){ return !!(S.match && S.match.rankByDiv); }
+function groupsFor(list, open, fa){ if(!rankByDiv()) fa = null; var g = {}; list.forEach(function(sh){ if(!enteredFor(sh, fa)) return; var k = open ? "Open" : divLabelFor(sh, fa); (g[k] = g[k] || []).push(sh); }); return g; }
 function groupOrder(keys){ return keys.sort(function(a, b){ var ia = CLASSES.findIndex(function(c){ return c.c === a; }), ib = CLASSES.findIndex(function(c){ return c.c === b; }); if(a === "Open") return -1; if(b === "Open") return 1; if(ia < 0) ia = 99; if(ib < 0) ib = 99; return ia - ib || a.localeCompare(b); }); }
 /* one stage: { open, model, groups: [{ name, rows: [{sh, sc, res, place, dqLater}], other: [{sh, sc, res, why}] }] }
    A DQ shooter keeps the stages shot before the DQ (ranked there); the DQ stage and anything after it are listed, not ranked. */
 function stageResults(st, forceOpen){
   var model = stageModel(st), open = forceOpen || stageOpen(st), out = { st: st, model: model, open: open, groups: [] };
-  var g = groupsFor(S.shooters, open);
+  var g = groupsFor(S.shooters, open, stageFirearm(st));
   groupOrder(Object.keys(g)).forEach(function(name){
     var rows = [], other = [];
     g[name].forEach(function(sh){
@@ -1625,8 +1648,8 @@ function countedStages(fa){
 function firearmOveralls(){ if(!isMultiGun()) return []; return matchFirearms().filter(function(f){ return countedStages(f).length > 0; }); }
 function matchResults(open, fa){
   var method = matchMethod(), stages = method === "mixed" ? [] : countedStages(fa), multi = isMultiGun();
-  if(multi) open = true;
-  var g = groupsFor(S.shooters, open), out = { method: method, open: open, fa: fa || null, stages: stages, groups: [] };
+  if(multi && (!fa || !rankByDiv())) open = true;
+  var g = groupsFor(S.shooters, open, fa || matchFirearm()), out = { method: method, open: open, fa: fa || null, stages: stages, groups: [] };
   groupOrder(Object.keys(g)).forEach(function(name){
     var rows = [], other = [];
     g[name].forEach(function(sh){
@@ -1661,11 +1684,12 @@ function overallViews(){
   var v = [];
   if(isMultiGun()){
     v.push({ id: "open", label: "Overall (all stages)", open: true, fa: null });
-    firearmOveralls().forEach(function(f){ v.push({ id: "fa:" + f, label: FN(f) + " overall", open: true, fa: f }); });
+    firearmOveralls().forEach(function(f){ v.push({ id: "fa:" + f, label: FN(f) + " overall", open: true, fa: f });
+      if(rankByDiv()) v.push({ id: "fd:" + f, label: FN(f) + " by division", open: false, fa: f }); });
   } else { v.push({ id: "overall", label: "Overall by class", open: false, fa: null }); v.push({ id: "open", label: "Open ranking", open: true, fa: null }); }
   return v;
 }
-function viewTitle(v){ return v.fa ? FN(v.fa) + " overall – " + FN(v.fa).toLowerCase() + "-only stages (open ranking)" : v.open ? "Overall – open ranking (all competitors)" + (isMultiGun() ? ", multi-gun match" : "") : "Overall – by class"; }
+function viewTitle(v){ if(v.fa && !v.open) return FN(v.fa) + " – " + FN(v.fa).toLowerCase() + "-only stages, ranked by each shooter's " + DISC_N[discOf(v.fa)].toLowerCase() + " division"; return v.fa ? FN(v.fa) + " overall – " + FN(v.fa).toLowerCase() + "-only stages (open ranking)" : v.open ? "Overall – open ranking (all competitors)" + (isMultiGun() ? ", multi-gun match" : "") : "Overall – by class"; }
 
 /* ---------------- CSV export ---------------- */
 function csvCell(v){ v = v == null ? "" : String(v); return /[",;\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
@@ -1677,8 +1701,8 @@ function resultsCSV(){
     rows.push([viewTitle(v).toUpperCase(), "Method: " + METHOD_TEXT[mr.method], "Stages: " + mr.stages.map(function(s){ return s.no; }).join(" ")]);
     rows.push(["Group", "Rank", "Shooter", "Member", "Class", "Category"].concat(mr.stages.map(function(s){ return "Stage " + s.no; })).concat(["Total", "HZ hits", "Status"]));
     mr.groups.forEach(function(g){
-      g.rows.forEach(function(r){ rows.push([g.name, r.place, shName(r.sh), r.sh.member, clsLabel(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat([totalText(mr.method, r), r.hz, r.tieHz ? "tie on total – placed by HZ hits" : ""])); });
-      g.other.forEach(function(r){ rows.push([g.name, "", shName(r.sh), r.sh.member, clsLabel(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat(["", "", r.why])); });
+      g.rows.forEach(function(r){ rows.push([g.name, r.place, shName(r.sh), r.sh.member, divsText(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat([totalText(mr.method, r), r.hz, r.tieHz ? "tie on total – placed by HZ hits" : ""])); });
+      g.other.forEach(function(r){ rows.push([g.name, "", shName(r.sh), r.sh.member, divsText(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat(["", "", r.why])); });
     });
     rows.push([]);
   });
@@ -1688,7 +1712,7 @@ function resultsCSV(){
     rows.push(["Group", "Rank", "Shooter", "Class", "Time (s)", "HZ", "PZI", "PZII", "Misses", "Steel standing", "Not engaged", "No-shoot hits", "Penalties", "Cover (imp/good)", "Hits (LR)", "Shots (LR)", "Stage score", "Status", "Signed", "Scored on", "Edits"]);
     sr.groups.forEach(function(g){
       g.rows.concat(g.other).forEach(function(r){ var x = r.res;
-        rows.push([g.name, r.place || "", shName(r.sh), clsLabel(r.sh), r.sc.time != null ? f2(r.sc.time) : "", x.hz, x.pz1, x.pz2, x.miss, x.standing, x.fte, x.ns, x.pen, (x.coverImp || 0) + "/" + (x.coverGood || 0), x.hits != null ? x.hits : "", x.shots != null ? x.shots : "", scoreText(st, x), r.why || (r.dqLater ? "DQ later in the match" : ""), r.sc.signed ? "yes" : "no", r.sc.device || "", (r.sc.history || []).length]); });
+        rows.push([g.name, r.place || "", shName(r.sh), divsText(r.sh), r.sc.time != null ? f2(r.sc.time) : "", x.hz, x.pz1, x.pz2, x.miss, x.standing, x.fte, x.ns, x.pen, (x.coverImp || 0) + "/" + (x.coverGood || 0), x.hits != null ? x.hits : "", x.shots != null ? x.shots : "", scoreText(st, x), r.why || (r.dqLater ? "DQ later in the match" : ""), r.sc.signed ? "yes" : "no", r.sc.device || "", (r.sc.history || []).length]); });
     });
     rows.push([]);
   });
@@ -1702,14 +1726,14 @@ function resultsSnapshot(){
   overallViews().forEach(function(v){
     var mr = matchResults(v.open, v.fa), rows = [];
     mr.groups.forEach(function(g){
-      g.rows.forEach(function(r){ rows.push([g.name, String(r.place), shName(r.sh), clsLabel(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat([totalText(mr.method, r), r.tieHz ? "tie – placed by HZ" : ""])); });
-      g.other.forEach(function(r){ rows.push([g.name, "", shName(r.sh), clsLabel(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat(["", String(r.why || "")])); });
+      g.rows.forEach(function(r){ rows.push([g.name, String(r.place), shName(r.sh), divsText(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat([totalText(mr.method, r), r.tieHz ? "tie – placed by HZ" : ""])); });
+      g.other.forEach(function(r){ rows.push([g.name, "", shName(r.sh), divsText(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat(["", String(r.why || "")])); });
     });
     tables.push({ t: v.label, s: viewTitle(v) + " · " + METHOD_TEXT[mr.method], h: ["Group", "#", "Shooter", "Class"].concat(mr.stages.map(function(s){ return "S" + s.no; })).concat(["Total", ""]), r: rows });
   });
   S.stages.forEach(function(st){
     var sr = stageResults(st), rows = [];
-    sr.groups.forEach(function(g){ g.rows.concat(g.other).forEach(function(r){ rows.push([g.name, String(r.place || ""), shName(r.sh), clsLabel(r.sh), r.sc.time != null ? f2(r.sc.time) : "", scoreText(st, r.res), String(r.why || (r.dqLater ? "DQ later in the match" : ""))]); }); });
+    sr.groups.forEach(function(g){ g.rows.concat(g.other).forEach(function(r){ rows.push([g.name, String(r.place || ""), shName(r.sh), divsText(r.sh), r.sc.time != null ? f2(r.sc.time) : "", scoreText(st, r.res), String(r.why || (r.dqLater ? "DQ later in the match" : ""))]); }); });
     tables.push({ t: "Stage " + st.no, s: "Stage " + st.no + " – " + st.title + " · " + (sr.open ? "open ranking" : "by class"), h: ["Group", "#", "Shooter", "Class", "Time (s)", "Score", ""], r: rows });
   });
   return { match: { name: S.match.name, date: S.match.date, venue: S.match.venue }, tables: tables };
@@ -1867,7 +1891,7 @@ function ask(msg, o){
   });
 }
 function alertMsg(msg){ return ask(msg, { cancel: false }); }
-function setTab(t){ U.tab = t; if(t === "score" && U.screen !== "entry" && U.screen !== "confirm") U.screen = U.stage ? "shooters" : "stages"; render(); window.scrollTo(0, 0); }
+function setTab(t){ if(t !== U.tab && typeof SEL !== "undefined") SEL = null; U.tab = t; if(t === "score" && U.screen !== "entry" && U.screen !== "confirm") U.screen = U.stage ? "shooters" : "stages"; render(); window.scrollTo(0, 0); }
 function render(){
   document.body.classList.toggle("dark", !!PREFS.dark); document.body.classList.toggle("big", !!PREFS.big);
   var inEntry = U.tab === "score" && (U.screen === "entry" || U.screen === "confirm");
@@ -1920,7 +1944,7 @@ function renderPick(){
     if(f && shName(sh).toLowerCase().indexOf(f) < 0) return;
     if((sh.squad || "") !== squad){ squad = sh.squad || ""; h += '<h3 style="margin-top:12px">' + (squad ? "Squad " + esc(squad) : "No squad") + '</h3>'; }
     var sc = S.scores[skey(st.id, sh.id)], res = sc ? calcScore(st, sc) : null;
-    h += '<button type="button" class="shrow' + (sc ? " done" : "") + (nx && nx.id === sh.id ? " next" : "") + '" data-shooter="' + sh.id + '"><span class="nm"><b>' + esc(shName(sh)) + '</b><span class="small muted">' + esc(clsLabel(sh)) + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.no ? " · #" + sh.no : "") + '</span></span><span class="sc">' + (sc ? esc(scoreText(st, res)) + (sc.history && sc.history.length ? ' <span class="chip warn">edited</span>' : "") : (nx && nx.id === sh.id ? '<span class="chip warn">Next</span>' : "–")) + '</span></button>';
+    h += '<button type="button" class="shrow' + (sc ? " done" : "") + (nx && nx.id === sh.id ? " next" : "") + '" data-shooter="' + sh.id + '"><span class="nm"><b>' + esc(shName(sh)) + '</b><span class="small muted">' + esc(divLabelFor(sh, stageFirearm(st)) || clsLabel(sh)) + (pfFor(sh, stageFirearm(st)) ? " " + esc(pfFor(sh, stageFirearm(st))) : "") + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.no ? " · #" + sh.no : "") + '</span></span><span class="sc">' + (sc ? esc(scoreText(st, res)) + (sc.history && sc.history.length ? ' <span class="chip warn">edited</span>' : "") : (nx && nx.id === sh.id ? '<span class="chip warn">Next</span>' : "–")) + '</span></button>';
   });
   if(!order.length) h += '<div class="msg warn">No shooters. Add them on the Shooters tab.</div>';
   h += '<div class="nextbar">' + (nx ? '<button type="button" class="primary" data-shooter="' + nx.id + '" id="btnNext">Next up: ' + esc(shName(nx)) + ' ›</button>' : (order.length ? '<div class="msg ok">Everyone is scored on this stage ✓</div>' : "")) + '</div>';
@@ -1947,7 +1971,7 @@ function parseTime(v){ v = String(v || "").trim().replace(",", "."); if(!v) retu
 function renderEntry(){
   var st = stageById(U.stage), sh = shooterById(U.shooter), sc = U.draft; if(!st || !sh || !sc){ U.screen = "stages"; return render(); }
   var res = calcScore(st, sc), model = res.model, h = "";
-  h += '<div class="ehead"><div class="row"><button type="button" class="slim" data-act="back">‹</button><div class="grow"><div class="who">' + esc(shName(sh)) + '</div><div class="small muted">Stage ' + st.no + ' – ' + esc(st.title) + ' · ' + esc(clsLabel(sh)) + (U.editing ? ' · <b style="color:var(--warn)">editing saved score</b>' : "") + '</div></div></div></div>';
+  h += '<div class="ehead"><div class="row"><button type="button" class="slim" data-act="back">‹</button><div class="grow"><div class="who">' + esc(shName(sh)) + '</div><div class="small muted">Stage ' + st.no + ' – ' + esc(st.title) + ' · ' + esc(divLabelFor(sh, stageFirearm(st)) || clsLabel(sh)) + (pfFor(sh, stageFirearm(st)) ? " " + esc(pfFor(sh, stageFirearm(st))) : "") + (U.editing ? ' · <b style="color:var(--warn)">editing saved score</b>' : "") + '</div></div></div></div>';
   if(sc.dq) h += '<div class="msg bad">DISQUALIFIED' + (sc.dqReason ? ": " + esc(sc.dqReason) : "") + ' – the DQ applies to the whole match; the shooter is not ranked (§4.6, p.73).</div><button type="button" class="wide" data-act="undq">Remove DQ</button>';
   else if(sc.dnf) h += '<div class="msg warn">DID NOT FINISH this stage – no stage score; not ranked overall.</div><button type="button" class="wide" data-act="undnf">Remove DNF</button>';
   else {
@@ -2073,13 +2097,13 @@ function lrNote(mr){ var lr = S.stages.filter(function(s){ return stageModel(s) 
 function stLine(mr, r){ return '<span class="stl small">' + mr.stages.map(function(s, i){ return 'S' + s.no + ' ' + esc(r.cells[i].txt); }).join(' · ') + '</span>'; }
 function overallTable(mr, g){
   var h = '<h3 style="margin-top:12px">' + esc(g.name === "Open" ? "Open – all competitors" : g.name + (CLS[g.name] ? " – " + CLS[g.name].n : "")) + '</h3><div class="scroll"><table class="rtable"><tr><th>#</th><th>Shooter</th>' + mr.stages.map(function(s){ return '<th class="n stc">S' + s.no + '</th>'; }).join("") + '<th class="n">Total</th></tr>';
-  g.rows.forEach(function(r){ h += '<tr><td class="pl">' + r.place + '</td><td><b>' + esc(shName(r.sh)) + '</b><br><span class="small muted">' + esc(clsLabel(r.sh)) + (mr.method !== "lr" ? " · " + r.hz + " HZ" : "") + '</span>' + stLine(mr, r) + (r.tieHz ? '<br><span class="chip warn">tie – HZ hits</span>' : "") + '</td>' + r.cells.map(function(c){ return '<td class="n stc">' + esc(c.txt) + '</td>'; }).join("") + '<td class="n"><b>' + esc(totalText(mr.method, r)) + '</b></td></tr>'; });
+  g.rows.forEach(function(r){ h += '<tr><td class="pl">' + r.place + '</td><td><b>' + esc(shName(r.sh)) + '</b><br><span class="small muted">' + esc(divsText(r.sh)) + (mr.method !== "lr" ? " · " + r.hz + " HZ" : "") + '</span>' + stLine(mr, r) + (r.tieHz ? '<br><span class="chip warn">tie – HZ hits</span>' : "") + '</td>' + r.cells.map(function(c){ return '<td class="n stc">' + esc(c.txt) + '</td>'; }).join("") + '<td class="n"><b>' + esc(totalText(mr.method, r)) + '</b></td></tr>'; });
   g.other.forEach(function(r){ h += '<tr class="un"><td class="pl">–</td><td><b>' + esc(shName(r.sh)) + '</b><br><span class="small">' + esc(r.why) + '</span>' + stLine(mr, r) + '</td>' + r.cells.map(function(c){ return '<td class="n stc">' + esc(c.txt) + '</td>'; }).join("") + '<td class="n">not ranked</td></tr>'; });
   return h + '</table></div>';
 }
 function stageTable(sr, g){
   var st = sr.st, h = '<h3 style="margin-top:12px">' + esc(g.name === "Open" ? "Open – all competitors" : g.name) + '</h3><div class="scroll"><table class="rtable"><tr><th>#</th><th>Shooter</th>' + (sr.model === "lr" ? '<th class="n">Hits</th><th class="n">Shots</th>' : '<th class="n">Time</th>') + '<th class="n">Score</th></tr>';
-  g.rows.forEach(function(r){ h += '<tr><td class="pl">' + r.place + '</td><td><b>' + esc(shName(r.sh)) + '</b>' + (r.sc.history && r.sc.history.length ? ' <span class="chip warn">edited</span>' : "") + (r.dqLater ? ' <span class="chip bad">DQ later</span>' : "") + '<br><span class="small muted">' + esc(clsLabel(r.sh)) + '</span></td>' + (sr.model === "lr" ? '<td class="n">' + r.res.hits + '</td><td class="n">' + r.res.shots + '</td>' : '<td class="n">' + (r.sc.time != null ? f2(r.sc.time) : "") + '</td>') + '<td class="n"><b>' + esc(scoreText(st, r.res)) + '</b></td></tr>'; });
+  g.rows.forEach(function(r){ h += '<tr><td class="pl">' + r.place + '</td><td><b>' + esc(shName(r.sh)) + '</b>' + (r.sc.history && r.sc.history.length ? ' <span class="chip warn">edited</span>' : "") + (r.dqLater ? ' <span class="chip bad">DQ later</span>' : "") + '<br><span class="small muted">' + esc(divsText(r.sh)) + '</span></td>' + (sr.model === "lr" ? '<td class="n">' + r.res.hits + '</td><td class="n">' + r.res.shots + '</td>' : '<td class="n">' + (r.sc.time != null ? f2(r.sc.time) : "") + '</td>') + '<td class="n"><b>' + esc(scoreText(st, r.res)) + '</b></td></tr>'; });
   g.other.forEach(function(r){ h += '<tr class="un"><td class="pl">–</td><td><b>' + esc(shName(r.sh)) + '</b></td><td class="n" colspan="' + (sr.model === "lr" ? 3 : 2) + '">' + esc(r.why) + '</td></tr>'; });
   return h + '</table></div>';
 }
@@ -2088,8 +2112,8 @@ function printResults(){
   overallViews().forEach(function(v){ var mr = matchResults(v.open, v.fa);
     h += '<h2>' + esc(viewTitle(v)) + '</h2><div style="font-size:9pt">' + esc(METHOD_TEXT[mr.method]) + esc(lrNote(mr)) + '</div>';
     mr.groups.forEach(function(g){ h += (v.open ? "" : '<h2 style="font-size:11pt">' + esc(g.name) + '</h2>') + '<table><tr><th>#</th><th>Shooter</th><th>Class</th>' + mr.stages.map(function(s){ return '<th>Stage ' + s.no + '</th>'; }).join("") + '<th>Total</th><th>HZ</th><th>Status</th></tr>' +
-      g.rows.map(function(r){ return '<tr><td>' + r.place + '</td><td>' + esc(shName(r.sh)) + '</td><td>' + esc(clsLabel(r.sh)) + '</td>' + r.cells.map(function(c){ return '<td class="n">' + esc(c.txt) + '</td>'; }).join("") + '<td class="n"><b>' + esc(totalText(mr.method, r)) + '</b></td><td class="n">' + (mr.method !== "lr" ? r.hz : "") + '</td><td>' + (r.tieHz ? "tie – HZ hits" : "") + '</td></tr>'; }).join("") +
-      g.other.map(function(r){ return '<tr><td></td><td>' + esc(shName(r.sh)) + '</td><td>' + esc(clsLabel(r.sh)) + '</td>' + r.cells.map(function(c){ return '<td class="n">' + esc(c.txt) + '</td>'; }).join("") + '<td></td><td></td><td>' + esc(r.why) + '</td></tr>'; }).join("") + '</table>'; });
+      g.rows.map(function(r){ return '<tr><td>' + r.place + '</td><td>' + esc(shName(r.sh)) + '</td><td>' + esc(divsText(r.sh)) + '</td>' + r.cells.map(function(c){ return '<td class="n">' + esc(c.txt) + '</td>'; }).join("") + '<td class="n"><b>' + esc(totalText(mr.method, r)) + '</b></td><td class="n">' + (mr.method !== "lr" ? r.hz : "") + '</td><td>' + (r.tieHz ? "tie – HZ hits" : "") + '</td></tr>'; }).join("") +
+      g.other.map(function(r){ return '<tr><td></td><td>' + esc(shName(r.sh)) + '</td><td>' + esc(divsText(r.sh)) + '</td>' + r.cells.map(function(c){ return '<td class="n">' + esc(c.txt) + '</td>'; }).join("") + '<td></td><td></td><td>' + esc(r.why) + '</td></tr>'; }).join("") + '</table>'; });
   });
   S.stages.forEach(function(st, i){ var sr = stageResults(st);
     h += '<h2' + (i === 0 ? ' class="pg"' : "") + '>Stage ' + st.no + ' – ' + esc(st.title) + ' (' + esc(st.division) + ', ' + esc(MODELS[st.scoring].n) + ', ' + stageTotal(st).rounds + ' rds' + (sr.open ? ", open ranking" : "") + ')</h2>';
@@ -2104,11 +2128,13 @@ function renderShooters(){
   var h = '<h2>Shooters (' + S.shooters.length + ')</h2>';
   if(S.role !== "ro") h += '<div class="grid2"><button type="button" class="primary" data-act="addsh">+ Add shooter</button><button type="button" data-act="import">Import CSV…</button></div><p class="small muted">CSV: a PractiScore registration export or the club roster (First/Last name, Member #, Division or class, Squad, Category/Age, Email).</p>';
   else h += '<div class="msg info">Shooters come from the main phone’s stage pack.</div>';
+  if(S.role !== "ro" && S.shooters.length) h += SEL ? '<div class="msg info">Tap shooters to select (' + Object.keys(SEL.ids).length + ' selected).</div><div class="grid2"><button type="button" data-act="selcancel">Done</button><button type="button" class="primary" data-act="selmove">Move to squad…</button></div>'
+    : '<div class="grid2" style="margin-top:8px"><button type="button" data-act="splitsq">Split squads…</button><button type="button" data-act="selmode">Move shooters…</button></div>' + (SPLIT_UNDO ? '<button type="button" class="wide" style="margin-top:6px" data-act="splitundo">Undo: ' + esc(SPLIT_UNDO.note) + '</button>' : "");
   var squad = null;
   squadSorted(S.shooters).forEach(function(sh){
     if((sh.squad || "") !== squad){ squad = sh.squad || ""; h += '<h3 style="margin-top:12px">' + (squad ? "Squad " + esc(squad) : "No squad") + '</h3>'; }
     var n = Object.keys(S.scores).filter(function(k){ return S.scores[k].shooter === sh.id; }).length;
-    h += '<button type="button" class="shrow" data-edsh="' + sh.id + '"><span class="nm"><b>' + (sh.no ? "#" + sh.no + " " : "") + esc(shName(sh)) + '</b><span class="small muted">' + esc(clsLabel(sh)) + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.member ? " · " + esc(sh.member) : "") + '</span></span><span class="small">' + n + ' stage' + (n === 1 ? "" : "s") + '</span></button>';
+    h += '<button type="button" class="shrow' + (SEL && SEL.ids[sh.id] ? " done" : "") + '" ' + (SEL ? 'data-pick' : 'data-edsh') + '="' + sh.id + '">' + (SEL ? '<span style="font-size:1.4em">' + (SEL.ids[sh.id] ? "☑" : "☐") + '</span>' : "") + '<span class="nm"><b>' + (sh.no ? "#" + sh.no + " " : "") + esc(shName(sh)) + '</b><span class="small muted">' + esc(divsText(sh)) + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.member ? " · " + esc(sh.member) : "") + (sh.visitor ? ' <span class="chip">Visitor</span>' : "") + '</span></span><span class="small">' + n + ' stage' + (n === 1 ? "" : "s") + '</span></button>';
   });
   if(S.role !== "ro" && S.shooters.length) h += '<div style="margin-top:28px;border-top:1px solid #8884;padding-top:14px"><button type="button" class="danger wide" data-act="clearsh">Clear shooters…</button><p class="small muted">Deletes every shooter in this match (and their scores).</p></div>';
   view().innerHTML = h;
@@ -2142,19 +2168,24 @@ function editShooter(id){
   o.innerHTML = '<h2>' + (id ? "Edit shooter" : "Add shooter") + '</h2><div class="grid2"><div><label>First name</label><input id="fFirst" value="' + esc(sh.first) + '" autocomplete="off"></div><div><label>Last name</label><input id="fLast" value="' + esc(sh.last) + '" autocomplete="off"></div></div>' +
     '<label>Firearm class (rulebook Table/Ch. 1)</label><select id="fCls">' + opts + '</select><input id="fClsText" placeholder="Class / division text" value="' + esc(sh.clsText || "") + '"' + (!sh.cls && sh.clsText ? "" : " hidden") + ' style="margin-top:6px">' +
     '<div class="grid2"><div><label>Squad</label><input id="fSquad" value="' + esc(sh.squad) + '"></div><div><label>Shooter no.</label><input id="fNo" inputmode="numeric" value="' + (sh.no || "") + '"></div></div>' +
+    (id && !ro ? '<div class="small muted" style="margin-top:6px">Move to squad:</div><div id="fQuick">' + squadNames().filter(function(x){ return x !== (sh.squad || ""); }).map(function(x){ return '<button type="button" class="chip" style="font-size:1em;padding:8px 14px" data-qsq="' + esc(x) + '">' + (x ? esc(x) : "No squad") + '</button>'; }).join("") + '<button type="button" class="chip" style="font-size:1em;padding:8px 14px" data-qsq="__new">New…</button></div>' : "") +
     '<div class="grid2"><div><label>Member no.</label><input id="fMember" value="' + esc(sh.member) + '"></div><div><label>Category / age</label><input id="fCat" value="' + esc(sh.cat) + '"></div></div>' +
     '<label>Email (optional)</label><input id="fEmail" type="email" value="' + esc(sh.email) + '">' +
+    '<label class="chk" style="margin-top:8px"><input type="checkbox" id="fVisitor"' + (sh.visitor ? " checked" : "") + '> Visitor (not a club member)</label>' +
     '<div class="grid2" style="margin-top:14px"><button type="button" id="fCancel">Cancel</button><button type="button" class="primary" id="fSave"' + (ro ? " disabled" : "") + '>Save</button></div>' + (id && !ro ? '<button type="button" class="danger wide" style="margin-top:10px" id="fDel">Delete shooter</button>' : "");
   o.hidden = false; window.scrollTo(0, 0);
   $("fCls").onchange = function(){ $("fClsText").hidden = this.value !== "__other"; };
   $("fCancel").onclick = function(){ o.hidden = true; };
   $("fSave").onclick = function(){
-    var n = { first: $("fFirst").value.trim(), last: $("fLast").value.trim(), member: $("fMember").value.trim(), squad: $("fSquad").value.trim(), cat: $("fCat").value.trim(), email: $("fEmail").value.trim(), no: parseInt($("fNo").value, 10) || null };
+    var n = { first: $("fFirst").value.trim(), last: $("fLast").value.trim(), member: $("fMember").value.trim(), squad: $("fSquad").value.trim(), cat: $("fCat").value.trim(), email: $("fEmail").value.trim(), visitor: $("fVisitor").checked, no: parseInt($("fNo").value, 10) || null };
     var c = $("fCls").value; n.cls = c && c !== "__other" ? c : ""; n.clsText = c === "__other" ? $("fClsText").value.trim() : "";
     if(!n.first && !n.last){ alertMsg("Enter a name."); return; }
     if(id) Object.assign(sh, n); else { n.id = sid(); if(!n.no) n.no = S.shooters.reduce(function(m, s){ return Math.max(m, s.no || 0); }, 0) + 1; S.shooters.push(n); }
     saveState(); o.hidden = true; render(); toast(id ? "Shooter updated" : "Shooter added: " + shName(n));
   };
+  Array.prototype.forEach.call(o.querySelectorAll("[data-qsq]"), function(b){ b.onclick = function(e){ e.stopPropagation(); var v = b.dataset.qsq;
+    var go = function(to){ if(to == null) return; to = to.trim(); var n = Object.keys(S.scores).filter(function(k){ return S.scores[k].shooter === id; }).length; o.hidden = true; var m = {}; m[id] = to; moveShooters(m, shName(sh) + " → squad " + (to || "none")); if(n) toast(shName(sh) + " moved to squad " + (to || "none") + " – their " + n + " score(s) stay with them", undoSquads); };
+    if(v === "__new") askSquad("Move " + shName(sh) + " to which squad?", sh.squad).then(go); else go(v); }; });
   var del = $("fDel"); if(del) del.onclick = function(){
     var n = Object.keys(S.scores).filter(function(k){ return S.scores[k].shooter === id; }).length;
     ask(n ? shName(sh) + " has " + n + " score(s). Delete the shooter and those scores?" : "Delete " + shName(sh) + "?", { ok: "Delete", okClass: "danger" }).then(function(ok){
@@ -2179,6 +2210,7 @@ function renderMatch(){
     var n = Object.keys(S.scores).length;
     h += '<div class="card"><h3>Send scores to the main phone</h3><p class="small">' + n + ' score(s) on this phone. Send the whole set every time – the main phone skips the ones it already has.</p><div class="grid2"><button type="button" class="primary" data-act="scorespack"' + (n ? "" : " disabled") + '>Share file</button><button type="button" data-act="scoresqr"' + (n ? "" : " disabled") + '>Show QR</button></div></div>';
   }
+  if(!ro) h += '<div class="card"><h3>Rankings</h3><label class="agree' + (S.match.rankByDiv ? " on" : "") + '"><input type="checkbox" id="mRankDiv"' + (S.match.rankByDiv ? " checked" : "") + '> Rank separately by discipline and division</label><p class="small muted">Off (default): one combined ranking, as before. On: each discipline’s stages are ranked by every shooter’s division for that discipline (handgun / shotgun / rifle) and the Results tab gets “by division” tables. Published results follow this setting.</p></div>';
   h += syncCard();
   h += regCard();
   h += '<div class="card"><h3>Backup</h3><div class="grid2"><button type="button" data-act="backup">Export backup</button><button type="button" data-act="import">Restore…</button></div><p class="small muted">The backup holds everything (match, stages, shooters, scores, signatures, audit trail). Keep one after each stage.</p></div>';
@@ -2191,6 +2223,7 @@ function renderMatch(){
   function bind(id, fn){ var e = $(id); if(e) e.onchange = fn; }
   bind("mName", function(){ S.match.name = this.value; saveState(); }); bind("mDate", function(){ S.match.date = this.value; saveState(); });
   bind("mMd", function(){ S.match.md = this.value; saveState(); }); bind("mVenue", function(){ S.match.venue = this.value; saveState(); });
+  bind("mRankDiv", function(){ S.match.rankByDiv = this.checked; saveState(); if(typeof squadsRepublish === "function") squadsRepublish(); render(); });
   bind("devName", function(){ S.device.name = this.value.trim(); saveState(); render(); });
   syncBind(); regBind();
   bind("pDark", function(){ PREFS.dark = this.checked; savePrefs(); render(); }); bind("pBig", function(){ PREFS.big = this.checked; savePrefs(); render(); });
@@ -2576,6 +2609,12 @@ function regCleanTok(t){ t = String(t || ""); return /^[A-Za-z0-9]{24}$/.test(t)
 function regSquadIds(reg){ return Object.keys(reg && reg.squads || {}).sort(function(a, b){ return a.localeCompare(b, undefined, { numeric: true }); }); }
 function regIsOpen(reg, now){ return !!reg && !reg.closed && (now || Date.now()) < reg.closesMs; }
 function regDivCode(d){ return String(d || "").split(" – ")[0].trim(); }
+/* per-discipline divisions of an entry: { handgun|shotgun|rifle: { d: code, pf } }. Old single-division entries map onto the discipline of their division. */
+var REG_DISCS = ["handgun", "shotgun", "rifle"], REG_DISC_N = { handgun: "Handgun", shotgun: "Shotgun", rifle: "Rifle" };
+function regDiscOfCode(c){ var cls = typeof CLS !== "undefined" ? CLS[c] : null, g = cls ? cls.g : ({ SMS:1, EMS:1, SSS:1, ESS:1 }[c] ? "shotgun" : /^(SSP|ESP|SCP|ECP|SPP|EPP|JMB|SRR|ERR|SCR|ECR)$/.test(c) ? "pistol" : "rifle");
+  return g === "pistol" || g === "revolver" ? "handgun" : g === "shotgun" ? "shotgun" : "rifle"; }
+function regEntryDivs(e){ if(e.divs && Object.keys(e.divs).length) return e.divs; var o = {}; if(e.division){ var k = regDiscOfCode(regDivCode(e.division)); o[k] = { d: regDivCode(e.division) }; if(k !== "shotgun") o[k].pf = e.pf || "minor"; } return o; }
+function regDivsText(e){ var d = regEntryDivs(e); return REG_DISCS.filter(function(k){ return d[k]; }).map(function(k){ return REG_DISC_N[k] + " " + d[k].d + (d[k].pf ? " " + d[k].pf : ""); }).join(" · "); }
 function regNowISO(){ return new Date().toISOString(); }
 /* save (create / edit / cancel / re-enter / organiser paid-remove) an entry. patch = fields to change. Resolves to the saved entry. */
 function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
@@ -2585,7 +2624,7 @@ function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
       if(!r[0].exists()) throw new Error("This registration does not exist.");
       var reg = r[0].data(), o = r[1].exists() ? r[1].data() : null, now = regNowISO();
       if(!asOrg && !regIsOpen(reg)) throw new Error("Registration is closed.");
-      var d = Object.assign({}, o || { first: "", last: "", member: "", email: "", division: "", pf: "minor", cls: "", cat: "", squad: "", status: "active", paid: false, createdAt: now }, patch);
+      var d = Object.assign({}, o || { first: "", last: "", member: "", visitor: false, email: "", division: "", pf: "minor", cls: "", cat: "", squad: "", status: "active", paid: false, createdAt: now }, patch);
       if(!asOrg) d.uid = uid; d.updatedAt = now; if(!o){ d.paid = false; d.status = "active"; }
       if(!reg.squads[d.squad]) throw new Error("Choose a squad.");
       var wasA = !!o && o.status === "active", isA = d.status === "active", same = wasA && isA && o.squad === d.squad;
@@ -2600,8 +2639,8 @@ function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
 }
 function regCSV(reg, entries){
   var q = function(v){ v = String(v == null ? "" : v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-  var rows = [["First Name","Last Name","Member #","Email","Division","Power Factor","Class","Category","Squad","Status","Paid","Registered","Updated"]];
-  entries.forEach(function(e){ rows.push([e.first, e.last, e.member, e.email, e.division, e.pf, e.cls, e.cat, reg.squads[e.squad] ? reg.squads[e.squad].n : e.squad, e.status, e.paid ? "yes" : "no", e.createdAt, e.updatedAt]); });
+  var rows = [["First Name","Last Name","SWPC Member #","Visitor","Email","Handgun","Handgun PF","Shotgun","Rifle","Rifle PF","Class","Category","Squad","Status","Paid","Registered","Updated"]];
+  entries.forEach(function(e){ rows.push([e.first, e.last, e.member || "", e.visitor ? "yes" : "no", e.email].concat((function(d){ return [d.handgun ? d.handgun.d : "", d.handgun ? d.handgun.pf || "" : "", d.shotgun ? d.shotgun.d : "", d.rifle ? d.rifle.d : "", d.rifle ? d.rifle.pf || "" : ""]; })(regEntryDivs(e))).concat([ e.cls, e.cat, reg.squads[e.squad] ? reg.squads[e.squad].n : e.squad, e.status, e.paid ? "yes" : "no", e.createdAt, e.updatedAt])); });
   return rows.map(function(r){ return r.map(q).join(","); }).join("\r\n") + "\r\n";
 }
 /* ===================== Shooter registration – organiser side (main phone) =====================
@@ -2639,7 +2678,7 @@ function regInner(){
     '<div class="grid2" style="margin-top:8px"><button type="button" id="regCsvB"' + (REGRT.entries.length ? "" : " disabled") + '>Export CSV</button><button type="button" class="primary" id="regImpB"' + (act.length ? "" : " disabled") + '>Import as shooters</button></div>' +
     '<details style="margin-top:10px"' + (REG.openList ? " open" : "") + ' id="regListD"><summary>Entries (' + REGRT.entries.length + ')</summary><ul class="list-plain small">' +
     regEntriesSorted().map(function(e){ var gone = e.status !== "active";
-      return '<li class="row" style="' + (gone ? "opacity:.55" : "") + '"><span class="grow"><b>' + esc(e.first + " " + e.last) + '</b>' + (gone ? " · " + esc(e.status) : "") + '<br>' + esc([r.squads[e.squad] ? r.squads[e.squad].n : e.squad, e.division, e.pf, e.cls, e.cat, e.member].filter(Boolean).join(" · ")) + (e.email ? '<br><span class="muted">' + esc(e.email) + '</span>' : "") + '</span>' +
+      return '<li class="row" style="' + (gone ? "opacity:.55" : "") + '"><span class="grow"><b>' + esc(e.first + " " + e.last) + '</b>' + (gone ? " · " + esc(e.status) : "") + '<br>' + esc([r.squads[e.squad] ? r.squads[e.squad].n : e.squad, regDivsText(e), e.cls, e.cat, e.visitor ? "Visitor" : e.member ? "SWPC " + e.member : ""].filter(Boolean).join(" · ")) + (e.email ? '<br><span class="muted">' + esc(e.email) + '</span>' : "") + '</span>' +
         (gone ? (e.status === "removed" ? '<button type="button" class="slim" data-regrestore="' + e.tok + '">Restore</button>' : "") : '<label class="agree' + (e.paid ? " on" : "") + '" style="margin:0 6px 0 0"><input type="checkbox" data-regpaid="' + e.tok + '"' + (e.paid ? " checked" : "") + '> Paid</label><button type="button" class="slim danger" data-regdel="' + e.tok + '">Remove</button>') + '</li>'; }).join("") + '</ul></details>' +
     '<button type="button" class="wide" style="margin-top:10px" id="regForgetB">Forget on this phone</button><p class="small muted">Forgetting only removes it from this phone; the registration stays online. Keep the code ' + esc(REG.code) + ' to reopen it here.</p>';
   return h;
@@ -2669,7 +2708,10 @@ function regUpdate(patch){ return regT().then(function(t){ return t.F.setDoc(t.F
 /* registration → shooters (same model as a PractiScore CSV import: first, last, member, cls/clsText, squad, cat, email) */
 function regToShooters(reg, entries){
   return entries.filter(function(e){ return e.status === "active"; }).map(function(e){
-    var code = classCode(e.division); return { first: e.first, last: e.last, member: e.member, cls: code, clsText: code ? "" : e.division, squad: reg.squads[e.squad] ? reg.squads[e.squad].n.replace(/^Squad\s*/i, "") : "", cat: e.cat, email: e.email, no: null, pf: e.pf, grade: e.cls };
+    var divs = regEntryDivs(e), first = DISCS.filter(function(k){ return divs[k]; })[0], f = first ? divs[first] : null;
+    var code = f ? classCode(f.d) : classCode(e.division), sdivs = {};
+    DISCS.forEach(function(k){ if(!divs[k]) return; var c = classCode(divs[k].d); sdivs[k] = { c: c, t: c ? "" : divs[k].d }; if(DISC_PF[k]) sdivs[k].pf = divs[k].pf || "minor"; });
+    return { divs: sdivs, first: e.first, last: e.last, member: e.visitor ? "" : e.member, visitor: !!e.visitor, cls: code, clsText: code ? "" : (f ? f.d : e.division), squad: reg.squads[e.squad] ? reg.squads[e.squad].n.replace(/^Squad\s*/i, "") : "", cat: e.cat, email: e.email, no: null, pf: f ? (f.pf || "") : e.pf, grade: e.cls };
   });
 }
 function regImport(){
@@ -2689,7 +2731,8 @@ function regForm(r){
   o.innerHTML = '<h2>' + (edit ? "Edit registration " + esc(REG.code) : "New shooter registration") + '</h2>' +
     '<label>Match name</label><input id="rgName" maxlength="120" value="' + esc(edit ? r.name : S.match.name) + '"><div class="grid2"><div><label>Date</label><input id="rgDate" type="date" value="' + esc(edit ? r.date : md) + '"></div><div><label>Venue</label><input id="rgVenue" maxlength="120" value="' + esc(edit ? r.venue : S.match.venue || "") + '"></div></div>' +
     '<label>Registration closes</label><input id="rgClose" type="datetime-local" value="' + esc(close) + '">' +
-    '<label>Divisions shooters can choose</label><div class="small" style="columns:2">' + CLASSES.map(function(c){ return '<label style="display:block"><input type="checkbox" data-rgdiv="' + c.c + '"' + (divs.indexOf(c.c) >= 0 ? " checked" : "") + '> ' + c.c + '</label>'; }).join("") + '</div>' +
+    '<label>Divisions shooters can choose, per discipline</label><p class="small muted">Shooters pick one division in each discipline they enter (at least one). Handgun and rifle also get a power factor (minor/major).</p>' +
+    DISCS.map(function(k){ return '<div class="small" style="margin-top:6px"><b>' + DISC_N[k] + '</b><div style="columns:2">' + CLASSES.filter(function(c){ return discOfCls(c.c) === k; }).map(function(c){ return '<label style="display:block"><input type="checkbox" data-rgdiv="' + c.c + '"' + (divs.indexOf(c.c) >= 0 ? " checked" : "") + '> ' + c.c + '</label>'; }).join("") + '</div></div>'; }).join("") +
     '<label>Squads and slots (one per line, "name: slots")</label><textarea id="rgSq" rows="5" style="width:100%">' + esc(sqTxt) + '</textarea>' + (edit ? '<p class="small muted">Existing squads keep their entries; a squad with entries cannot be removed or set below its entries.</p>' : "") +
     '<label>Classes (optional, comma separated – leave empty to hide)</label><input id="rgCls" value="' + esc(edit ? r.classes.join(", ") : "") + '" placeholder="e.g. A, B, C, D, U">' +
     '<label>Categories (comma separated)</label><input id="rgCats" value="' + esc(edit ? r.cats.join(", ") : REG_CATS) + '">' +
@@ -2711,7 +2754,8 @@ function regForm(r){
     if(!Object.keys(squads).length) err = err || "Add at least one squad.";
     if(Object.keys(squads).length > 40) err = "At most 40 squads.";
     if(err) return alertMsg(err);
-    var body = { name: name, date: $("rgDate").value, venue: $("rgVenue").value.trim(), divisions: dv, classes: list($("rgCls").value), cats: list($("rgCats").value), squads: squads, closesMs: closesMs, note: $("rgNote").value.trim().slice(0, 1000), updatedAt: regNowISO(), v: 1 };
+    var disc = {}; dv.forEach(function(d){ var k = discOfCls(regDivCode(d)); (disc[k] = disc[k] || []).push(d); });
+    var body = { name: name, date: $("rgDate").value, venue: $("rgVenue").value.trim(), divisions: dv, disc: disc, classes: list($("rgCls").value), cats: list($("rgCats").value), squads: squads, closesMs: closesMs, note: $("rgNote").value.trim().slice(0, 1000), updatedAt: regNowISO(), v: 1 };
     var job = edit ? regCreateOrUpdate(REG.code, Object.assign({}, r, body), Object.keys(squads).filter(function(id){ return !r.squads[id]; })) : regCreate(body);
     job.then(function(code){ o.hidden = true; o.innerHTML = ""; toast(edit ? "Registration saved" : "Registration " + code + " created"); render(); }).catch(function(e){ alertMsg(e.message); });
   };
@@ -2730,6 +2774,111 @@ function regCreate(body, code){
   }).then(function(){ REG = { code: code }; regSave(); REGRT.reg = null; REGRT.entries = []; regUnwatch(); regWatch(); return code; }); });
 }
 function regOpenCode(code){ code = syncCleanCode(code); if(!code) return; regUnwatch(); REG = { code: code }; regSave(); regWatch(); }
+/* ===================== Split squads / move shooters (main phone) ===================== */
+var SPL = null, SPLIT_UNDO = null, SEL = null; /* SEL: null or {ids:{}} while multi-select is on */
+function squadNames(){ var m = {}; S.shooters.forEach(function(s){ m[s.squad || ""] = 1; }); return Object.keys(m).sort(function(a, b){ return String(a || "~").localeCompare(String(b || "~"), undefined, { numeric: true }); }); }
+function scoredIds(){ var m = {}; Object.keys(S.scores).forEach(function(k){ m[S.scores[k].shooter] = (m[S.scores[k].shooter] || 0) + 1; }); return m; }
+/* Pure planner: shooters → {id: squadIndex}. Sizes differ by at most 1; with keepDiv, each division stays in one squad
+   unless it is bigger than a squad's room (best-fit decreasing; a division is split only when nothing fits it). */
+function splitPlan(list, n, keepDiv){
+  n = Math.max(1, Math.min(6, n | 0)); var N = list.length, cap = [], i, plan = {};
+  for(i = 0; i < n; i++) cap.push(Math.floor(N / n) + (i < N % n ? 1 : 0));
+  var sorted = list.slice().sort(function(a, b){ return clsLabel(a).localeCompare(clsLabel(b)) || ((a.no || 9999) - (b.no || 9999)) || shName(a).localeCompare(shName(b)); });
+  if(!keepDiv){ var q = 0; sorted.forEach(function(s){ while(q < n - 1 && cap[q] <= 0) q++; plan[s.id] = q; cap[q]--; }); return plan; }
+  var groups = {}; sorted.forEach(function(s){ var k = clsLabel(s); (groups[k] = groups[k] || []).push(s); });
+  var gl = Object.keys(groups).map(function(k){ return groups[k]; }).sort(function(a, b){ return b.length - a.length || clsLabel(a[0]).localeCompare(clsLabel(b[0])); });
+  gl.forEach(function(g){
+    var best = -1; for(i = 0; i < n; i++) if(cap[i] >= g.length && (best < 0 || cap[i] < cap[best])) best = i;
+    if(best >= 0){ g.forEach(function(s){ plan[s.id] = best; }); cap[best] -= g.length; return; }
+    var rest = g.slice(); while(rest.length){ var m = 0; for(i = 1; i < n; i++) if(cap[i] > cap[m]) m = i; var take = rest.splice(0, Math.max(1, cap[m])); take.forEach(function(s){ plan[s.id] = m; }); cap[m] -= take.length; }
+  });
+  return plan;
+}
+function splitDefaultNames(n, src){
+  var names = [], used = {}; if(src != null){ squadNames().forEach(function(x){ if(x !== src) used[x] = 1; }); }
+  if(src){ names.push(src); }
+  for(var k = 1; names.length < n; k++){ var v = String(k); if(!used[v] && names.indexOf(v) < 0) names.push(v); }
+  return names;
+}
+function splitPool(){ return S.shooters.filter(function(s){ return SPL.src === null || (s.squad || "") === SPL.src; }); }
+function splitReplan(){ SPL.plan = splitPlan(splitPool(), SPL.n, SPL.keep); SPL.sel = null; }
+function splitDialog(){
+  if(S.role === "ro") return; if(!S.shooters.length) return alertMsg("Add or import shooters first.");
+  SPL = { n: 2, src: null, keep: true, names: splitDefaultNames(2, null), plan: {}, sel: null }; splitReplan(); splitRender();
+}
+function splitRender(){
+  var o = $("overlay"), sq = squadNames(), sc = scoredIds(), pool = splitPool();
+  var h = '<h2>Split squads</h2><div class="grid2"><div><label>Number of squads</label><select id="spN">' + [2,3,4,5,6].map(function(k){ return '<option' + (k === SPL.n ? " selected" : "") + '>' + k + '</option>'; }).join("") + '</select></div>' +
+    '<div><label>Split</label><select id="spSrc"><option value="__all">All shooters (' + S.shooters.length + ')</option>' + sq.map(function(x){ var c = S.shooters.filter(function(s){ return (s.squad || "") === x; }).length; return '<option value="' + esc(x) + '"' + (SPL.src === x ? " selected" : "") + '>' + (x ? "Squad " + esc(x) : "No squad") + ' (' + c + ')</option>'; }).join("") + '</select></div></div>' +
+    '<label class="chk" style="margin-top:8px"><input type="checkbox" id="spKeep"' + (SPL.keep ? " checked" : "") + '> Keep divisions together</label>' +
+    '<label>Squad names</label><div class="grid2">' + SPL.names.map(function(nm, i){ return '<input data-spname="' + i + '" value="' + esc(nm) + '">'; }).join("") + '</div>';
+  var clash = SPL.src === null ? [] : SPL.names.filter(function(nm){ return nm !== SPL.src && sq.indexOf(nm) >= 0; });
+  if(clash.length) h += '<div class="msg warn">Squad ' + clash.map(esc).join(", ") + ' already exists – the shooters will join it.</div>';
+  var nsc = pool.filter(function(s){ return sc[s.id]; }).length;
+  if(nsc) h += '<div class="msg warn">' + nsc + ' of these shooters already have scores. Moving is fine – their scores stay with them.</div>';
+  h += '<p class="small muted">Preview – tap a shooter to move them to another squad.</p>';
+  for(var i = 0; i < SPL.n; i++){
+    var mem = squadSorted(pool.filter(function(s){ return SPL.plan[s.id] === i; })).sort(function(a, b){ return clsLabel(a).localeCompare(clsLabel(b)) || shName(a).localeCompare(shName(b)); });
+    h += '<h3 style="margin-top:12px" data-spsq="' + i + '">Squad ' + esc(SPL.names[i] || "?") + ' (' + mem.length + ')</h3>';
+    mem.forEach(function(s){
+      h += '<button type="button" class="shrow" data-sptap="' + s.id + '"><span class="nm"><b>' + esc(shName(s)) + '</b><span class="small muted">' + esc(clsLabel(s)) + (s.squad && SPL.src === null ? " · was " + esc(s.squad) : "") + '</span></span>' + (sc[s.id] ? '<span class="chip warn">scored</span>' : "") + '</button>';
+      if(SPL.sel === s.id) h += '<div class="grid2" style="margin:-4px 0 10px">' + SPL.names.map(function(nm, j){ return j === i ? "" : '<button type="button" data-spto="' + j + '">→ Squad ' + esc(nm) + '</button>'; }).join("") + '</div>';
+    });
+  }
+  h += '<div class="grid2" style="margin-top:14px"><button type="button" id="spCancel">Cancel</button><button type="button" class="primary" id="spApply">Apply…</button></div>';
+  o.innerHTML = h; o.hidden = false;
+  $("spN").onchange = function(){ SPL.n = +this.value; SPL.names = splitDefaultNames(SPL.n, SPL.src); splitReplan(); splitRender(); };
+  $("spSrc").onchange = function(){ SPL.src = this.value === "__all" ? null : this.value; SPL.names = splitDefaultNames(SPL.n, SPL.src); splitReplan(); splitRender(); };
+  $("spKeep").onchange = function(){ SPL.keep = this.checked; splitReplan(); splitRender(); };
+  Array.prototype.forEach.call(o.querySelectorAll("[data-spname]"), function(inp){ inp.onchange = function(){ SPL.names[+inp.dataset.spname] = inp.value.trim(); splitRender(); }; });
+  o.onclick = function(e){ var b = e.target.closest("[data-sptap],[data-spto]"); if(!b) return;
+    if(b.dataset.sptap){ SPL.sel = SPL.sel === b.dataset.sptap ? null : b.dataset.sptap; } else { SPL.plan[SPL.sel] = +b.dataset.spto; SPL.sel = null; }
+    splitRender(); };
+  $("spCancel").onclick = function(){ o.hidden = true; o.onclick = null; SPL = null; };
+  $("spApply").onclick = splitApply;
+}
+function splitApply(){
+  var names = SPL.names.map(function(x){ return String(x || "").trim(); });
+  if(names.some(function(x){ return !x; })) return alertMsg("Give every squad a name.");
+  if(names.some(function(x, i){ return names.indexOf(x) !== i; })) return alertMsg("Squad names must be different.");
+  var pool = splitPool(), sc = scoredIds(), moves = {};
+  pool.forEach(function(s){ var to = names[SPL.plan[s.id]]; if(to != null && to !== (s.squad || "")) moves[s.id] = to; });
+  var n = Object.keys(moves).length; if(!n) return alertMsg("Nothing changes – every shooter is already in that squad.");
+  var nsc = Object.keys(moves).filter(function(id){ return sc[id]; }).length;
+  ask("Move " + n + " shooter" + (n === 1 ? "" : "s") + " into squads " + names.join(", ") + "?" + (nsc ? " " + nsc + " of them already have scores – the scores stay with them." : ""), { ok: "Apply split" }).then(function(ok){
+    if(!ok) return; $("overlay").hidden = true; $("overlay").onclick = null; SPL = null;
+    moveShooters(moves, "Split into squads " + names.join(", "));
+  });
+}
+/* the one write path for squad changes: {id: newSquad} → save (syncs the setup to RO phones), audit, undo */
+function moveShooters(moves, note){
+  var before = {}; Object.keys(moves).forEach(function(id){ var s = shooterById(id); if(!s) return; before[id] = s.squad || ""; s.squad = moves[id]; });
+  var n = Object.keys(before).length; if(!n) return 0;
+  SPLIT_UNDO = { before: before, note: note };
+  S.audit.push({ at: nowISO(), device: S.device.name, key: "squads", note: note + " (" + n + " shooter" + (n === 1 ? "" : "s") + ")" });
+  saveState(); squadsRepublish(); render();
+  toast(note + " – " + n + " moved", undoSquads);
+  return n;
+}
+function undoSquads(){
+  if(!SPLIT_UNDO) return false; var b = SPLIT_UNDO.before, note = SPLIT_UNDO.note; SPLIT_UNDO = null;
+  Object.keys(b).forEach(function(id){ var s = shooterById(id); if(s) s.squad = b[id]; });
+  S.audit.push({ at: nowISO(), device: S.device.name, key: "squads", note: "Undone: " + note });
+  saveState(); squadsRepublish(); render(); toast("Squad change undone"); return true;
+}
+/* if results are already published, refresh them so the read-only board matches */
+function squadsRepublish(){ if(typeof SYNC !== "undefined" && SYNC.on && SYNC.host && SYNC.published && typeof syncPublishResults === "function") syncPublishResults(false).catch(function(){}); }
+function askSquad(title, exclude){
+  var sq = squadNames().filter(function(x){ return x && x !== exclude; });
+  return ask(title + (sq.length ? " Existing: " + sq.join(", ") + "." : ""), { input: true, required: true, ok: "Move", placeholder: "Squad name / number", value: sq[0] || "" });
+}
+function moveSelected(){
+  var ids = Object.keys(SEL.ids); if(!ids.length) return alertMsg("Tap shooters to select them first.");
+  var sc = scoredIds(), nsc = ids.filter(function(id){ return sc[id]; }).length;
+  askSquad("Move " + ids.length + " selected shooter" + (ids.length === 1 ? "" : "s") + " to which squad?" + (nsc ? " (" + nsc + " already have scores – they stay with them.)" : "")).then(function(v){
+    if(v == null) return; v = v.trim(); var m = {}; ids.forEach(function(id){ m[id] = v; }); SEL = null; moveShooters(m, "Moved to squad " + v);
+  });
+}
 /* ===================== start-up and events ===================== */
 function onClick(e){
   var b = e.target.closest("button,[data-act]"); if(!b) return;
@@ -2745,12 +2894,18 @@ function onClick(e){
   if(d.qs){ U.draft.qs.pass = d.qs === "pass"; saveDraft(); return keepScroll(renderEntry); }
   if(d.res){ U.res = d.res; return renderResults(); }
   if(d.edsh) return editShooter(d.edsh);
+  if(d.pick){ if(SEL.ids[d.pick]) delete SEL.ids[d.pick]; else SEL.ids[d.pick] = 1; return keepScroll(renderShooters); }
   if(d.resolve){ var r = d.resolve.split("|"); resolveConflict(r[0], r[1]); return renderMerge(); }
   if(d.delst){ var st = stageById(d.delst), n = scoredCount(st); return ask("Remove stage " + st.no + " – " + st.title + (n ? " and its " + n + " score(s)" : "") + "?", { ok: "Remove", okClass: "danger" }).then(function(ok){ if(!ok) return; Object.keys(S.scores).forEach(function(k){ if(S.scores[k].stage === st.id) delete S.scores[k]; }); S.stages = S.stages.filter(function(s){ return s !== st; }); S.audit.push({ at: nowISO(), device: S.device.name, key: st.id, note: "Stage removed: " + st.title }); saveState(); render(); }); }
   switch(d.act){
     case "stages": U.screen = "stages"; U.stage = null; render(); break;
     case "import": $("fileAny").click(); break;
     case "clearsh": clearAll("shooters"); break;
+    case "splitsq": splitDialog(); break;
+    case "splitundo": undoSquads(); break;
+    case "selmode": SEL = { ids: {} }; render(); break;
+    case "selcancel": SEL = null; render(); break;
+    case "selmove": moveSelected(); break;
     case "clearst": clearAll("stages"); break;
     case "back": ask(U.editing ? "Leave without saving the changes?" : "Leave this shooter? The entry so far is discarded.", { ok: "Leave", okClass: "danger" }).then(function(ok){ if(ok){ clearDraft(); U.screen = "shooters"; U.draft = null; render(); } }); break;
     case "review": goReview(); break;
@@ -2790,7 +2945,7 @@ function boot(){
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later" }).then(function(v){ if(v && v.trim()){ S.device.name = v.trim(); saveState(); render(); } }); }, 300);
   if("serviceWorker" in navigator && location.protocol !== "file:") setupUpdates();
 }
-window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, reg: { get state(){ return REG; }, rt: REGRT, create: regCreate, open: regOpenCode, toShooters: regToShooters, importNow: regImport, set: regOrgSet, update: regUpdate }, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; } };
+window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, overallViews: overallViews, regEntryDivs: typeof regEntryDivs !== "undefined" ? regEntryDivs : null, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, reg: { get state(){ return REG; }, rt: REGRT, create: regCreate, open: regOpenCode, toShooters: regToShooters, importNow: regImport, set: regOrgSet, update: regUpdate }, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; }, split: { plan: splitPlan, dialog: splitDialog, move: moveShooters, undo: undoSquads } };
 document.addEventListener("DOMContentLoaded", boot);
 
 /* updates: a new version (new sw.js build hash) installs in the background; the user is told and reloads when ready */

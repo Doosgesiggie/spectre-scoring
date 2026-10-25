@@ -56,6 +56,12 @@ function regCleanTok(t){ t = String(t || ""); return /^[A-Za-z0-9]{24}$/.test(t)
 function regSquadIds(reg){ return Object.keys(reg && reg.squads || {}).sort(function(a, b){ return a.localeCompare(b, undefined, { numeric: true }); }); }
 function regIsOpen(reg, now){ return !!reg && !reg.closed && (now || Date.now()) < reg.closesMs; }
 function regDivCode(d){ return String(d || "").split(" – ")[0].trim(); }
+/* per-discipline divisions of an entry: { handgun|shotgun|rifle: { d: code, pf } }. Old single-division entries map onto the discipline of their division. */
+var REG_DISCS = ["handgun", "shotgun", "rifle"], REG_DISC_N = { handgun: "Handgun", shotgun: "Shotgun", rifle: "Rifle" };
+function regDiscOfCode(c){ var cls = typeof CLS !== "undefined" ? CLS[c] : null, g = cls ? cls.g : ({ SMS:1, EMS:1, SSS:1, ESS:1 }[c] ? "shotgun" : /^(SSP|ESP|SCP|ECP|SPP|EPP|JMB|SRR|ERR|SCR|ECR)$/.test(c) ? "pistol" : "rifle");
+  return g === "pistol" || g === "revolver" ? "handgun" : g === "shotgun" ? "shotgun" : "rifle"; }
+function regEntryDivs(e){ if(e.divs && Object.keys(e.divs).length) return e.divs; var o = {}; if(e.division){ var k = regDiscOfCode(regDivCode(e.division)); o[k] = { d: regDivCode(e.division) }; if(k !== "shotgun") o[k].pf = e.pf || "minor"; } return o; }
+function regDivsText(e){ var d = regEntryDivs(e); return REG_DISCS.filter(function(k){ return d[k]; }).map(function(k){ return REG_DISC_N[k] + " " + d[k].d + (d[k].pf ? " " + d[k].pf : ""); }).join(" · "); }
 function regNowISO(){ return new Date().toISOString(); }
 /* save (create / edit / cancel / re-enter / organiser paid-remove) an entry. patch = fields to change. Resolves to the saved entry. */
 function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
@@ -65,7 +71,7 @@ function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
       if(!r[0].exists()) throw new Error("This registration does not exist.");
       var reg = r[0].data(), o = r[1].exists() ? r[1].data() : null, now = regNowISO();
       if(!asOrg && !regIsOpen(reg)) throw new Error("Registration is closed.");
-      var d = Object.assign({}, o || { first: "", last: "", member: "", email: "", division: "", pf: "minor", cls: "", cat: "", squad: "", status: "active", paid: false, createdAt: now }, patch);
+      var d = Object.assign({}, o || { first: "", last: "", member: "", visitor: false, email: "", division: "", pf: "minor", cls: "", cat: "", squad: "", status: "active", paid: false, createdAt: now }, patch);
       if(!asOrg) d.uid = uid; d.updatedAt = now; if(!o){ d.paid = false; d.status = "active"; }
       if(!reg.squads[d.squad]) throw new Error("Choose a squad.");
       var wasA = !!o && o.status === "active", isA = d.status === "active", same = wasA && isA && o.squad === d.squad;
@@ -80,8 +86,8 @@ function regSaveEntry(F, db, code, tok, patch, uid, asOrg){
 }
 function regCSV(reg, entries){
   var q = function(v){ v = String(v == null ? "" : v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-  var rows = [["First Name","Last Name","Member #","Email","Division","Power Factor","Class","Category","Squad","Status","Paid","Registered","Updated"]];
-  entries.forEach(function(e){ rows.push([e.first, e.last, e.member, e.email, e.division, e.pf, e.cls, e.cat, reg.squads[e.squad] ? reg.squads[e.squad].n : e.squad, e.status, e.paid ? "yes" : "no", e.createdAt, e.updatedAt]); });
+  var rows = [["First Name","Last Name","SWPC Member #","Visitor","Email","Handgun","Handgun PF","Shotgun","Rifle","Rifle PF","Class","Category","Squad","Status","Paid","Registered","Updated"]];
+  entries.forEach(function(e){ rows.push([e.first, e.last, e.member || "", e.visitor ? "yes" : "no", e.email].concat((function(d){ return [d.handgun ? d.handgun.d : "", d.handgun ? d.handgun.pf || "" : "", d.shotgun ? d.shotgun.d : "", d.rifle ? d.rifle.d : "", d.rifle ? d.rifle.pf || "" : ""]; })(regEntryDivs(e))).concat([ e.cls, e.cat, reg.squads[e.squad] ? reg.squads[e.squad].n : e.squad, e.status, e.paid ? "yes" : "no", e.createdAt, e.updatedAt])); });
   return rows.map(function(r){ return r.map(q).join(","); }).join("\r\n") + "\r\n";
 }
 
@@ -115,19 +121,24 @@ function regCSV(reg, entries){
     if(msg) h += '<div class="card msg ' + (msg.k || "ok") + '">' + msg.h + '</div>';
     if(mine){
       var sqn = reg.squads[mine.squad] ? reg.squads[mine.squad].n : "";
-      h += '<div class="card"><h2>Your entry</h2>' + (act ? '<div><b>' + esc(mine.first + " " + mine.last) + '</b> · ' + esc(sqn) + ' · ' + esc(regDivCode(mine.division)) + ' ' + esc(mine.pf) + '</div>' : '<div class="msg warn">' + (mine.status === "removed" ? "The organiser removed this entry. Contact them if this is a mistake." : "You cancelled this entry.") + '</div>') +
+      h += '<div class="card"><h2>Your entry</h2>' + (act ? '<div><b>' + esc(mine.first + " " + mine.last) + '</b> · ' + esc(sqn) + ' · ' + esc(regDivsText(mine)) + '</div>' : '<div class="msg warn">' + (mine.status === "removed" ? "The organiser removed this entry. Contact them if this is a mistake." : "You cancelled this entry.") + '</div>') +
         '<p class="small">Private edit link – keep it to change or cancel your entry until registration closes (do not share it):<br><code id="editLink">' + esc(editLink()) + '</code></p><button type="button" id="copyB">Copy my edit link</button></div>';
     }
     var canEdit = open && (!mine || mine.status !== "removed");
     if(canEdit){
+      var byDisc = { handgun: [], shotgun: [], rifle: [] }, fd = regEntryDivs(f);
+      if(reg.disc) REG_DISCS.forEach(function(k){ byDisc[k] = (reg.disc[k] || []).slice(); }); else reg.divisions.forEach(function(d){ byDisc[regDiscOfCode(regDivCode(d))].push(d); });
       var divOpts = reg.divisions.map(function(d){ var c = regDivCode(d); return '<option value="' + esc(c) + '"' + (f.division === c ? " selected" : "") + '>' + esc(d) + '</option>'; }).join("");
       var opts = function(list, cur){ return '<option value="">– choose –</option>' + list.map(function(x){ return '<option' + (cur === x ? " selected" : "") + '>' + esc(x) + '</option>'; }).join(""); };
       h += '<div class="card"><h2>' + (mine ? (act ? "Change your entry" : "Enter again") : "Enter this match") + '</h2>' +
         '<div class="grid2"><div><label for="rFirst">Name</label><input id="rFirst" maxlength="60" autocomplete="given-name" value="' + esc(f.first) + '"></div><div><label for="rLast">Surname</label><input id="rLast" maxlength="60" autocomplete="family-name" value="' + esc(f.last) + '"></div></div>' +
-        '<label for="rMember">SAPSA / IPSC member number</label><input id="rMember" maxlength="40" value="' + esc(f.member) + '">' +
+        '<label class="agree' + (f.visitor ? " on" : "") + '" style="margin-top:10px"><input type="checkbox" id="rVisitor"' + (f.visitor ? " checked" : "") + '> Visitor (not a club member)</label>' +
+        '<div id="rMemberW"' + (f.visitor ? " hidden" : "") + '><label for="rMember">SWPC member number</label><input id="rMember" maxlength="40" value="' + esc(f.member) + '"></div>' +
         '<label for="rEmail">Email (optional – only the organiser sees it)</label><input id="rEmail" type="email" maxlength="120" autocomplete="email" value="' + esc(f.email) + '">' +
-        '<label for="rDiv">Division</label><select id="rDiv"><option value="">– choose –</option>' + divOpts + '</select>' +
-        '<label>Power factor</label><div class="seg"><label><input type="radio" name="rPf" value="minor"' + (f.pf !== "major" ? " checked" : "") + '> Minor</label><label><input type="radio" name="rPf" value="major"' + (f.pf === "major" ? " checked" : "") + '> Major</label></div>' +
+        '<h3 style="margin:14px 0 4px">Disciplines</h3><p class="small muted" style="margin:0">Choose a division for each discipline you are entering (at least one).</p>' +
+        REG_DISCS.filter(function(k){ return byDisc[k].length; }).map(function(k){ var cur = fd[k] || {};
+          return '<label for="rDiv_' + k + '">' + REG_DISC_N[k] + ' division</label><select id="rDiv_' + k + '" data-disc="' + k + '"><option value="">– not entering –</option>' + byDisc[k].map(function(d){ var c = regDivCode(d); return '<option value="' + esc(c) + '"' + (cur.d === c ? " selected" : "") + '>' + esc(d) + '</option>'; }).join("") + '</select>' +
+            (k !== "shotgun" ? '<div class="seg" id="rPfW_' + k + '"' + (cur.d ? "" : " hidden") + '><label><input type="radio" name="rPf_' + k + '" value="minor"' + (cur.pf !== "major" ? " checked" : "") + '> ' + REG_DISC_N[k] + ' minor</label><label><input type="radio" name="rPf_' + k + '" value="major"' + (cur.pf === "major" ? " checked" : "") + '> ' + REG_DISC_N[k] + ' major</label></div>' : ""); }).join("") +
         (reg.classes.length ? '<label for="rCls">Class</label><select id="rCls">' + opts(reg.classes, f.cls) + '</select>' : "") +
         (reg.cats.length ? '<label for="rCat">Category</label><select id="rCat">' + opts(reg.cats, f.cat) + '</select>' : "") +
         '<label>Squad</label>' + ids.map(function(id){ var s = reg.squads[id], n = counts[id] || 0, own = act && mine.squad === id, left = s.max - n, full = left <= 0 && !own;
@@ -138,13 +149,18 @@ function regCSV(reg, entries){
     app.innerHTML = h;
     var c = document.getElementById("copyB"); if(c) c.onclick = function(){ (navigator.clipboard ? navigator.clipboard.writeText(editLink()) : Promise.reject()).then(function(){ c.textContent = "Copied"; }, function(){ c.textContent = "Select the link above and copy it"; }); };
     var s = document.getElementById("saveB"); if(s) s.onclick = save;
+    Array.prototype.forEach.call(document.querySelectorAll("select[data-disc]"), function(sl){ sl.onchange = function(){ var w = document.getElementById("rPfW_" + sl.dataset.disc); if(w) w.hidden = !sl.value; }; });
+    var vz = document.getElementById("rVisitor"); if(vz) vz.onchange = function(){ document.getElementById("rMemberW").hidden = vz.checked; vz.parentNode.classList.toggle("on", vz.checked); };
     var x = document.getElementById("cancelB"); if(x) x.onclick = function(){ if(confirm("Cancel your entry? Your squad slot is released.")) commit({ status: "cancelled" }, "Your entry is cancelled. You can enter again with your edit link until registration closes."); };
     Array.prototype.forEach.call(document.querySelectorAll(".sq input"), function(r){ r.onchange = function(){ Array.prototype.forEach.call(document.querySelectorAll(".sq"), function(l){ l.classList.toggle("on", l.querySelector("input").checked); }); }; });
   }
   function save(){
     var sq = document.querySelector('input[name="rSq"]:checked'), pf = document.querySelector('input[name="rPf"]:checked');
-    var d = { first: val("rFirst"), last: val("rLast"), member: val("rMember"), email: val("rEmail"), division: val("rDiv"), pf: pf ? pf.value : "minor", cls: val("rCls"), cat: val("rCat"), squad: sq ? sq.value : "", status: "active" };
-    var err = !d.first || !d.last ? "Enter your name and surname." : !d.division ? "Choose a division." : reg.classes.length && !d.cls ? "Choose a class." : reg.cats.length && !d.cat ? "Choose a category." : !d.squad ? "Choose a squad." : d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email) ? "Check the email address." : "";
+    var d = { first: val("rFirst"), last: val("rLast"), member: "", visitor: !!(document.getElementById("rVisitor") || {}).checked, email: val("rEmail"), division: "", pf: "minor", divs: {}, cls: val("rCls"), cat: val("rCat"), squad: sq ? sq.value : "", status: "active" };
+    if(!d.visitor) d.member = val("rMember");
+    REG_DISCS.forEach(function(k){ var v = val("rDiv_" + k); if(!v) return; d.divs[k] = { d: v }; if(k !== "shotgun"){ var p = document.querySelector('input[name="rPf_' + k + '"]:checked'); d.divs[k].pf = p ? p.value : "minor"; } });
+    var firstK = REG_DISCS.filter(function(k){ return d.divs[k]; })[0]; if(firstK){ d.division = d.divs[firstK].d; d.pf = d.divs[firstK].pf || "minor"; }
+    var err = !d.first || !d.last ? "Enter your name and surname." : !d.visitor && !d.member ? "Enter your SWPC member number, or tick Visitor." : !d.division ? "Choose a division in at least one discipline." : reg.classes.length && !d.cls ? "Choose a class." : reg.cats.length && !d.cat ? "Choose a category." : !d.squad ? "Choose a squad." : d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email) ? "Check the email address." : "";
     if(err){ msg = { k: "err", h: esc(err) }; paint(); window.scrollTo(0, 0); return; }
     var isNew = !mine; commit(d, isNew ? "You are registered! Save your private edit link below." : "Your entry is saved.");
   }
