@@ -1312,7 +1312,7 @@ function r2(v){ return Math.round(v * 100) / 100; }
 
 /* ---------------- state ---------------- */
 function blankState(){
-  return { app: SS_APP, version: SS_SCHEMA, matchId: sid(), match: { name: "Spectre Tactical Shooting", date: todayISO(), venue: "Somerset West Pistol Club", md: "Gideon Joubert" },
+  return { app: SS_APP, version: SS_SCHEMA, matchId: sid(), match: { name: "Spectre Tactical Shooting - Club Shoot", date: todayISO(), venue: "Somerset West Pistol Club", md: "Gideon Joubert" },
     device: { id: sid(), name: "" }, role: "main", ro: null, stages: [], shooters: [], scores: {}, conflicts: [], audit: [], merged: [], issued: [], ros: [], archive: null };
 }
 var S = null;
@@ -2147,7 +2147,7 @@ function saveScore(){
 
 /* ---------- Results tab ---------- */
 function renderResults(){
-  var views = overallViews(), h = '<h2>Results</h2>';
+  var views = overallViews(), h = '<h2>Results</h2>' + (typeof archiveResultsBanner === "function" ? archiveResultsBanner() : "");
   if(matchModel() === "mixed") h += '<div class="msg bad">' + esc(METHOD_TEXT.mixed) + '</div>';
   h += '<div class="restabs">';
   var tabs = views.map(function(v){ return [v.id, v.label]; }).concat(S.stages.map(function(s){ return [s.id, "Stage " + s.no]; }));
@@ -2168,6 +2168,7 @@ function renderResults(){
   }
   h += '<div class="grid2" style="margin-top:12px"><button type="button" data-act="csv">Export CSV</button><button type="button" data-act="print">Print / PDF</button></div><button type="button" class="wide" style="margin-top:8px" data-act="sheets">Score sheets (print / PDF)…</button><button type="button" class="wide" style="margin-top:8px" data-act="pack">Results pack (print / PDF)</button><button type="button" class="wide" style="margin-top:8px" data-act="backup">Full match backup (JSON)</button>';
   view().innerHTML = h;
+  if(typeof archiveBind === "function") archiveBind();
 }
 function lrNote(mr){ var lr = S.stages.filter(function(s){ return stageModel(s) === "lr"; }); return lr.length && mr.method !== "lr" ? " · Long-Range stage" + (lr.length > 1 ? "s " : " ") + lr.map(function(s){ return s.no; }).join(", ") + " ranked separately, not in the total" : ""; }
 function stLine(mr, r){ return '<span class="stl small">' + mr.stages.map(function(s, i){ return 'S' + s.no + ' ' + esc(r.cells[i].txt); }).join(' · ') + '</span>'; }
@@ -2496,6 +2497,8 @@ function syncTransport(){
       putOfficer: function(code, uid, data){ return F.setDoc(F.doc(db, "rooms", code, "officers", uid), data); },
       putArchive: function(id, data){ return F.setDoc(F.doc(db, "archive", id), data); },
       putArchiveData: function(id, data){ return F.setDoc(F.doc(db, "archive", id, "data", "main"), data); },
+      isPublisher: function(uid){ return F.getDoc(F.doc(db, "publishers", uid)).then(function(d){ return d.exists(); }); },
+      findArchive: function(date){ return F.getDocs(F.query(F.collection(db, "archive"), F.where("date", "==", date), F.where("hidden", "==", false))).then(function(q){ return q.docs.map(function(d){ var x = d.data(); x.id = d.id; return x; }); }); },
       online: function(on){ return on ? F.enableNetwork(db) : F.disableNetwork(db); },
       F: F, db: db /* raw SDK handles: shooter registration (s-reg.js) */
     };
@@ -3250,6 +3253,7 @@ function rolesCard(){
       '<div class="rostages">' + S.stages.map(function(st){ return '<label class="agree' + (r.stages.indexOf(st.id) >= 0 ? " on" : "") + '"><input type="checkbox" data-ros="' + r.id + '|' + st.id + '"' + (r.stages.indexOf(st.id) >= 0 ? " checked" : "") + '> Stage ' + st.no + '</label>'; }).join("") + '</div>' +
       (c ? '<div class="small">Assignment code: <b class="rocode">' + esc(c) + '</b></div>' : "") + '</div>'; }).join("") : '<p class="small muted">No ROs yet.</p>';
   h += '<div class="row" style="margin-top:8px"><input id="roNew" class="grow" placeholder="RO name" maxlength="60"><button type="button" id="roAdd">Add RO</button></div>';
+  h += '<button type="button" class="wide" style="margin-top:10px" id="sqSheet">Squad &amp; RO sheet (print / PDF)</button>';
   if(ros.length && !live) h += '<p class="small muted">Create a live match room (Live sync, above) to get assignment codes and QRs.</p>';
   return h + '</div>';
 }
@@ -3259,6 +3263,7 @@ function rolesBind(){
   c.onchange = function(e){ var t = e.target; if(!t.dataset || !t.dataset.ros) return; var p = t.dataset.ros.split("|"), r = roById(p[0]); if(!r) return;
     var st = r.stages.filter(function(x){ return x !== p[1]; }); if(t.checked) st.push(p[1]); roSetStages(r.id, st); render(); };
   c.onclick = function(e){ var b = e.target.closest("button"); if(!b) return;
+    if(b.id === "sqSheet"){ printSquadSheet(); return; }
     if(b.id === "roAdd"){ try{ var r = roAdd($("roNew").value); if(r){ toast("RO " + r.name + " added"); render(); } }catch(er){ alertMsg(er.message); } }
     if(b.dataset.rodel){ var r2 = roById(b.dataset.rodel); ask("Remove RO " + r2.name + "? Their phone stops scoring; scores already saved stay.", { ok: "Remove", okClass: "danger" }).then(function(ok){ if(ok){ roRemove(r2.id); render(); } }); }
     if(b.dataset.roqr) roQRDialog(b.dataset.roqr);
@@ -3268,6 +3273,39 @@ function roQRDialog(id){ var r = roById(id), code = roCode(id); if(!r || !code) 
   o.innerHTML = '<h2>' + esc(r.name) + '</h2><p class="small">RO phone: Match → Live sync → Join → Scan QR, or type the assignment code.</p><div class="syncqr" id="roQR"></div><p style="text-align:center;font-size:1.4em"><b>' + esc(code) + '</b></p><button type="button" class="wide" id="roQRClose">Close</button>';
   o.hidden = false; try{ $("roQR").innerHTML = qrSVG("SSLIVE|" + SYNC.code + "|" + id); }catch(e){ $("roQR").textContent = "Could not draw the QR – type the code."; }
   $("roQRClose").onclick = function(){ o.hidden = true; o.innerHTML = ""; };
+}
+
+/* ===================== printable squad & RO sheet =====================
+   From the shooter list (registration import) + the RO-to-stage assignments above. Names, member no, division,
+   category only – never e-mail, ID or cell numbers. Falls back to the live registration list when no shooters are loaded yet. */
+function squadSheetShooters(){
+  if(S.shooters.length) return squadSorted(S.shooters);
+  if(typeof REGRT !== "undefined" && REGRT.reg && REGRT.entries.length && typeof regToShooters === "function") return squadSorted(regToShooters(REGRT.reg, REGRT.entries));
+  return [];
+}
+function squadSheetHTML(){
+  var list = squadSheetShooters(), ros = (S.ros || []).filter(function(r){ return r.name; }), m = S.match || {};
+  var sq = {}; list.forEach(function(s){ var k = s.squad || ""; (sq[k] = sq[k] || []).push(s); });
+  var keys = Object.keys(sq).sort(function(a, b){ return String(a || "~").localeCompare(String(b || "~"), undefined, { numeric: true }); });
+  var head = '<h1>' + esc(m.name || "Match") + ' – squads &amp; range officers</h1><div class="small">' + esc([m.date, m.venue, m.md ? "Match Director: " + m.md : ""].filter(Boolean).join(" · ")) + ' · ' + list.length + ' shooters · ' + keys.length + ' squad' + (keys.length === 1 ? "" : "s") + ' · printed ' + esc(new Date().toLocaleString("en-ZA")) + '</div>';
+  var h = head + '<h2>Stages and range officers</h2><table><tr><th>Stage</th><th>Title</th><th class="n">Rounds</th><th>Range officer(s)</th></tr>';
+  S.stages.forEach(function(st){ var who = ros.filter(function(r){ return (r.stages || []).indexOf(st.id) >= 0; }).map(function(r){ return esc(r.name); });
+    var rd = 0; try{ rd = stageTotal(st).rounds; }catch(e){}
+    h += '<tr><td>' + st.no + '</td><td>' + esc(st.title || "") + '</td><td class="n">' + (rd || "") + '</td><td>' + (who.length ? who.join(", ") : '<i>unassigned</i>') + '</td></tr>'; });
+  if(!S.stages.length) h += '<tr><td colspan="4"><i>No stages loaded yet.</i></td></tr>';
+  h += '</table>';
+  if(ros.length){ h += '<h2>Range officers</h2><table><tr><th>RO</th><th>Stages</th><th style="width:30mm">Signed in</th></tr>' + ros.map(function(r){
+      var sts = (r.stages || []).map(function(id){ var st = stageById(id); return st ? st.no : null; }).filter(function(x){ return x != null; }).sort(function(a, b){ return a - b; });
+      return '<tr><td>' + esc(r.name) + '</td><td>' + (sts.length ? "Stage " + sts.join(", ") : "–") + '</td><td></td></tr>'; }).join("") + '</table>'; }
+  keys.forEach(function(k, i){
+    h += '<h2' + (i === 0 ? ' class="pg"' : "") + '>' + (k ? "Squad " + esc(k) : "No squad") + ' <span class="small">(' + sq[k].length + ')</span></h2><table><tr><th style="width:8mm">#</th><th>Shooter</th><th>Member no</th><th>Division / class</th><th>Category</th><th style="width:16mm">Present</th></tr>' +
+      sq[k].map(function(s, j){ return '<tr><td class="n">' + (j + 1) + '</td><td>' + esc(shName(s)) + (s.visitor ? ' <i>(visitor)</i>' : "") + '</td><td>' + esc(s.member || "") + '</td><td>' + esc(divsText(s)) + '</td><td>' + esc(s.cat || "") + '</td><td>&#9744;</td></tr>'; }).join("") + '</table>'; });
+  if(!list.length) h += '<p><i>No shooters yet – import the registrations first.</i></p>';
+  return '<div class="sqsheet">' + h + '</div>';
+}
+function printSquadSheet(noPrint){
+  if(!squadSheetShooters().length && !S.stages.length){ alertMsg("Add shooters (or import the registrations) and stages first."); return false; }
+  $("printArea").innerHTML = squadSheetHTML(); if(!noPrint) window.print(); return true;
 }
 /* ===================== per-shooter score sheets (print / PDF, one A4 page per shooter) ===================== */
 /* which shooters: "all" | "sq:<squad>" | "sh:<id>" – in squad order */
@@ -3343,29 +3381,82 @@ function archivePayload(at){
   var sheets = squadSorted(S.shooters).map(function(sh){ var d = sheetData(sh); delete d.match; delete d.ver; delete d.method; delete d.neg; d.rows.forEach(function(r){ delete r.sigKey; }); return d; });
   return { v: 1, publishedAt: at, match: { name: S.match.name, date: S.match.date, venue: S.match.venue, md: S.match.md, note: matchNote() }, notes: notesPlain(), neg: matchModel() !== "positive", method: METHOD_TEXT[matchMethod()] || "", ver: SS_VER, sheets: sheets, stages: S.stages.map(function(st){ return { no: st.no, title: st.title, rounds: stageTotal(st).rounds, firearms: st.firearms || [], limited: !!st.limited, sub: st.subtitle || "" }; }), tables: resultsSnapshot().tables };
 }
+/* ---------- who may publish: allow-listed uids (Firestore publishers/{uid}, added by hand in the Firebase console) ---------- */
+/* publisher check runs only on a tap or a publish (never on render: no surprise sign-ins / network on ordinary phones); last answer remembered on this phone */
+var ARCHRT = (function(){ var r = { pub: null, uid: "", checking: false }; try{ var x = JSON.parse(localStorage.getItem("ss-archpub") || "null"); if(x && x.uid){ r.uid = String(x.uid); r.pub = x.pub === true ? true : x.pub === false ? false : null; } }catch(er){} return r; })();
+function archiveRemember(){ try{ localStorage.setItem("ss-archpub", JSON.stringify({ uid: ARCHRT.uid, pub: ARCHRT.pub })); }catch(er){} }
+function archiveCheckPub(){
+  if(!syncConfigured() || ARCHRT.checking) return Promise.resolve(ARCHRT.pub);
+  ARCHRT.checking = true;
+  return syncTransport().then(function(t){ return t.signIn().then(function(uid){ ARCHRT.uid = uid; return t.isPublisher ? t.isPublisher(uid) : true; }); })
+    .then(function(ok){ ARCHRT.pub = !!ok; }, function(){ ARCHRT.pub = ARCHRT.uid ? false : null; })
+    .then(function(){ ARCHRT.checking = false; archiveRemember(); archivePaint(); return ARCHRT.pub; });
+}
+/* scoring progress: every shooter × every stage */
+function archiveProgress(){ var need = S.shooters.length * S.stages.length, done = 0;
+  S.stages.forEach(function(st){ S.shooters.forEach(function(sh){ if(S.scores[skey(st.id, sh.id)]) done++; }); });
+  return { need: need, done: done, complete: need > 0 && done >= need }; }
+/* same club shoot already in the archive (published from another phone / the box)? → update that entry instead of a duplicate */
+function archiveFindExisting(t){
+  if(!S.match.date || !t.findArchive) return Promise.resolve(null);
+  var nm = String(S.match.name || "").trim().toLowerCase();
+  return t.findArchive(String(S.match.date)).then(function(l){ return l.filter(function(x){ return String(x.matchName || "").trim().toLowerCase() === nm; })[0] || null; }, function(){ return null; });
+}
 function archivePublish(hide){
   if(!syncConfigured()) return Promise.reject(new Error("The archive needs the Firebase project (live sync set-up)."));
   if(!hide && !S.shooters.length) return Promise.reject(new Error("Add shooters and scores first."));
-  var A = S.archive || {}, id = A.id || archNewId(), at = nowISO(), data = hide ? "" : JSON.stringify(archivePayload(at));
+  var A = S.archive || {}, at = nowISO(), data = hide ? "" : JSON.stringify(archivePayload(at));
   if(data.length > ARCH_MAX) return Promise.reject(new Error("This match is too large for the archive (" + Math.round(data.length / 1024) + " KB)."));
+  var id;
   return syncTransport().then(function(t){ return t.signIn().then(function(uid){
-    var idx = { v: 1, matchName: String(S.match.name || "").slice(0, 200), date: String(S.match.date || "").slice(0, 20), venue: String(S.match.venue || "").slice(0, 120), publishedAt: at, hidden: !!hide, createdBy: uid, shooters: hide ? 0 : S.shooters.length, stages: hide ? 0 : S.stages.length };
-    return t.putArchive(id, idx).then(function(){ return t.putArchiveData(id, { v: 1, data: data }); });
+    var chk = t.isPublisher ? t.isPublisher(uid).catch(function(){ return false; }) : Promise.resolve(true);
+    return chk.then(function(ok){ ARCHRT.uid = uid; ARCHRT.pub = ok; archiveRemember();
+      if(!ok) throw new Error("This phone is not allowed to publish to the archive yet. Publisher ID: " + uid + " – add it in the Firebase console (Firestore › publishers).");
+      return A.id ? { id: A.id } : archiveFindExisting(t); })
+    .then(function(ex){ id = ex && ex.id || archNewId();
+      var idx = { v: 1, matchName: String(S.match.name || "Spectre Tactical Shooting - Club Shoot").slice(0, 200), date: String(S.match.date || "").slice(0, 20), venue: String(S.match.venue || "").slice(0, 120), publishedAt: at, hidden: !!hide, createdBy: uid, shooters: hide ? 0 : S.shooters.length, stages: hide ? 0 : S.stages.length };
+      return t.putArchive(id, idx).then(function(){ return t.putArchiveData(id, { v: 1, data: data }); });
+    });
   }); }).then(function(){ S.archive = { id: id, at: at, hidden: !!hide }; saveState(); return id; });
 }
 function archiveLive(){ return !!(S.archive && S.archive.id && !S.archive.hidden); }
 function archiveURL(){ return S.archive && S.archive.id ? new URL("archive.html#m=" + S.archive.id, location.href).href : new URL("archive.html", location.href).href; }
+function archivePubLine(){
+  if(ARCHRT.pub === true) return '<p class="small ok" id="archWho">&#10003; This phone is an archive publisher.</p>';
+  if(ARCHRT.pub === false) return '<div class="msg bad small" id="archWho"><b>This phone may not publish yet.</b> Send this Publisher ID to the club admin to add it in the Firebase console (Firestore › <code>publishers</code>):<br><b class="rocode" id="archUid">' + esc(ARCHRT.uid) + '</b> <button type="button" class="slim" id="archCopy">Copy</button> <button type="button" class="slim" id="archRecheck">Check again</button></div>';
+  return '<p class="small muted" id="archWho">' + (ARCHRT.checking ? "Checking publisher rights…" : '<button type="button" class="slim" id="archRecheck">Check publisher rights</button>') + '</p>';
+}
 function archiveCard(){
   if(!syncConfigured()) return "";
-  var A = S.archive, live = archiveLive();
-  return '<div class="card" id="archCard"><h3>Score sheet archive</h3><p class="small muted">Publishes this match to the public archive page so shooters can open their own score sheet (PDF) and the full results – no login, read-only. Names, divisions, squads and scores are public; e-mail addresses and signatures are never published.' + (live ? "" : " Publishing results in the live room also updates the archive once it is published here.") + '</p>' +
+  var A = S.archive, live = archiveLive(), pr = archiveProgress();
+  return '<div class="card" id="archCard"><h3>Score sheet archive</h3><p class="small muted">One tap publishes this match to the public archive page, so shooters can open their own score sheet (PDF) and the full results – no login, read-only. Names, divisions, squads and scores are public; e-mail addresses and signatures are never published.' + (live ? "" : " Publishing results in the live room also updates the archive once it is published here.") + '</p>' +
+    '<p class="small">' + (pr.complete ? '<span class="chip ok">All ' + pr.need + ' scores in</span>' : '<span class="chip warn">' + pr.done + ' of ' + pr.need + ' scores in</span>') + '</p>' +
     '<div class="grid2"><button type="button" class="primary" id="archPub">' + (live ? "Update archive" : "Publish to archive") + '</button><button type="button" id="archUnpub"' + (live ? "" : " disabled") + '>Unpublish</button></div>' +
-    '<p class="small" id="archState">' + (live ? 'Published ' + esc(fmtWhen(A.at)) + ' · <a href="' + esc(archiveURL()) + '" target="_blank" rel="noopener">open the archive page</a>' : A && A.id ? "Unpublished " + esc(fmtWhen(A.at)) + "." : "Not in the archive.") + '</p></div>';
+    '<p class="small" id="archState">' + (live ? 'Published ' + esc(fmtWhen(A.at)) + ' · <a href="' + esc(archiveURL()) + '" target="_blank" rel="noopener">open the archive page</a>' : A && A.id ? "Unpublished " + esc(fmtWhen(A.at)) + "." : "Not in the archive.") + '</p>' + archivePubLine() + '</div>';
+}
+function archivePaint(){ var w = $("archWho"); if(w) w.outerHTML = archivePubLine(); }
+/* confirm, then publish / update */
+function archiveConfirmPublish(){
+  var live = archiveLive(), pr = archiveProgress();
+  var msg = (live ? "Update the archive entry for " : "Publish ") + (S.match.name || "this match") + (S.match.date ? " (" + S.match.date + ")" : "") + (live ? " with the current scores?" : " to the public archive?") +
+    " " + S.shooters.length + " shooters, " + S.stages.length + " stages." + (pr.complete ? "" : " Warning: only " + pr.done + " of " + pr.need + " scores are in – missing scores show as not ranked.");
+  return ask(msg, { ok: live ? "Update archive" : "Publish" }).then(function(ok){ if(!ok) return;
+    return archivePublish(false).then(function(){ toast(live ? "Archive updated" : "Published to the score sheet archive"); render(); }).catch(function(er){ alertMsg(er.message); archivePaint(); }); });
+}
+/* "scoring closed" prompt on the Results tab (main phone, all scores in) */
+function archiveResultsBanner(){
+  if(!syncConfigured() || S.role === "ro") return "";
+  var pr = archiveProgress(); if(!pr.complete) return "";
+  var live = archiveLive();
+  return '<div class="msg ' + (live ? "info" : "ok") + '" id="archBanner"><b>' + (live ? "In the archive" : "All scores are in.") + '</b> ' + (live ? "Changed a score? Update the public archive." : "Publish the results and score sheets to the public archive.") + '<button type="button" class="wide primary" style="margin-top:8px" id="archBannerGo">' + (live ? "Update archive" : "Publish to archive") + '</button></div>';
 }
 function archiveBind(){
+  var bb = $("archBannerGo"); if(bb) bb.onclick = archiveConfirmPublish;
   var c = $("archCard"); if(!c) return;
   c.onclick = function(e){ var b = e.target.closest("button"); if(!b) return;
-    if(b.id === "archPub") archivePublish(false).then(function(){ toast("Published to the score sheet archive"); render(); }).catch(function(er){ alertMsg(er.message); });
+    if(b.id === "archPub") archiveConfirmPublish();
+    if(b.id === "archRecheck"){ ARCHRT.pub = null; archiveCheckPub(); }
+    if(b.id === "archCopy"){ try{ navigator.clipboard.writeText(ARCHRT.uid).then(function(){ toast("Publisher ID copied"); }); }catch(er){} }
     if(b.id === "archUnpub") ask("Remove this match from the public archive?", { ok: "Unpublish", okClass: "danger" }).then(function(ok){ if(ok) archivePublish(true).then(function(){ toast("Removed from the archive"); render(); }).catch(function(er){ alertMsg(er.message); }); });
   };
 }
@@ -3437,7 +3528,7 @@ function boot(){
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later" }).then(function(v){ if(v && v.trim()){ S.device.name = v.trim(); saveState(); render(); } }); }, 300);
   if("serviceWorker" in navigator && location.protocol !== "file:") setupUpdates();
 }
-window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, overallViews: overallViews, regEntryDivs: typeof regEntryDivs !== "undefined" ? regEntryDivs : null, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, reg: { get state(){ return REG; }, rt: REGRT, create: regCreate, open: regOpenCode, toShooters: regToShooters, importNow: regImport, set: regOrgSet, update: regUpdate }, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; }, sheets: { html: sheetsHTML, print: printSheets, dialog: sheetsDialog, pick: sheetShooters, data: sheetData, render: sheetRender }, roles: { add: roAdd, set: roSetStages, remove: roRemove, map: rolesMap, byId: roById, code: roCode, parse: roParseCode, officer: officerName }, archive: { publish: archivePublish, payload: archivePayload, url: archiveURL }, split: { plan: splitPlan, dialog: splitDialog, move: moveShooters, undo: undoSquads } };
+window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, overallViews: overallViews, regEntryDivs: typeof regEntryDivs !== "undefined" ? regEntryDivs : null, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, reg: { get state(){ return REG; }, rt: REGRT, create: regCreate, open: regOpenCode, toShooters: regToShooters, importNow: regImport, set: regOrgSet, update: regUpdate }, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; }, sheets: { html: sheetsHTML, print: printSheets, dialog: sheetsDialog, pick: sheetShooters, data: sheetData, render: sheetRender }, roles: { add: roAdd, set: roSetStages, remove: roRemove, map: rolesMap, byId: roById, code: roCode, parse: roParseCode, officer: officerName }, archive: { publish: archivePublish, payload: archivePayload, url: archiveURL, progress: archiveProgress, checkPub: archiveCheckPub, rt: ARCHRT }, squadSheet: { html: squadSheetHTML, print: printSquadSheet }, split: { plan: splitPlan, dialog: splitDialog, move: moveShooters, undo: undoSquads } };
 document.addEventListener("DOMContentLoaded", boot);
 
 /* updates: a new version (new sw.js build hash) installs in the background; the user is told and reloads when ready */
