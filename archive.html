@@ -35,6 +35,17 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 .paper{background:#fff;width:210mm;max-width:100%;padding:10mm;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.15);overflow-x:auto}
 #pdfStage{position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:38px}
 .err{color:#a00}
+.anav{display:flex;gap:4px;background:#0e1d38;padding:0 12px}
+.anav a{color:#fff;text-decoration:none;padding:10px 16px;font-weight:700;border-bottom:3px solid transparent}
+.anav a.on{border-bottom-color:#d6a92a}
+.mnote{margin-top:6px;padding:6px 8px;background:#fff8e1;border:1px solid #e8d48a;border-radius:6px;font-size:.9em;white-space:pre-wrap}
+.anotes{font-size:.9em;padding-left:22px}
+.rules h2{margin:0 0 4px}.rules h3{margin:16px 0 6px;color:var(--navy);font-size:1.05em}
+.rules table{border-collapse:collapse;width:100%;font-size:.95em}
+.rules th,.rules td{border-bottom:1px solid var(--border);padding:7px 6px;text-align:left;vertical-align:top}
+.rules th{background:#eef1f6}
+.rules td.v{white-space:nowrap;font-weight:700;text-align:right}
+.rules ul{padding-left:20px;margin:6px 0}.rules li{margin:4px 0}
 /* sheet layout (shared with the app) */
 .sheet{font-size:10pt;color:#000;background:#fff}
 .sheet h1{font-size:15pt;margin:0 0 1mm}
@@ -55,13 +66,52 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 .sheet .esig{height:9mm;max-width:28mm;object-fit:contain}
 .sheet .shnote{font-size:8pt;color:#333}
 .sheet .shfoot{margin-top:6mm;font-size:7.5pt;color:#555}
+.sheet sup.fn{font-size:6.5pt;font-weight:700;margin-left:0.6mm}
+.sheet .shfn{margin:0 0 2mm;padding-left:5mm;font-size:8pt}
+.sheet .shmnote{font-size:8.5pt;margin:0 0 2mm;padding:1.2mm 2mm;border:0.6pt solid #000;white-space:pre-wrap}
 
 @media print{header,.noprint{display:none!important}body{background:#fff}main{padding:0;max-width:none}.paper{box-shadow:none;margin:0;padding:0;width:auto}.card{border:0}}
 </style>
 </head>
 <body>
 <header><h1>Spectre Tactical Shooting – score sheet archive</h1><div class="sub">Published match results. Find your name to view or download your score sheet.</div></header>
+<nav class="anav noprint"><a href="#" id="navRes">Results</a><a href="#rules" id="navRules">Rules</a></nav>
 <main id="app"><div class="card">Loading…</div></main>
+<template id="rulesTpl"><div class="card rules">
+<h2>Club match rules</h2>
+<p class="small muted">How Spectre Tactical club matches are scored. Summary of the Spectre Tactical Shooting Rules, Classes and Divisions, 2nd Edition (2026), Chapter 4. The rulebook is the final authority; page numbers are the book’s printed pages.</p>
+<h3>Stage score: time plus penalties</h3>
+<p>Club shoots use the <b>negative scoring model</b> (shot timer). Your stage score is your raw time in seconds plus penalty seconds (§4.1.2, §4.2.4, p.60 and 64). <b>All rounds count.</b></p>
+<table><tr><th>What the RO records</th><th style="text-align:right">Adds</th></tr>
+<tr><td>Hit Zone (HZ) – A zone / down zero, or falling steel that falls</td><td class="v">+0 s</td></tr>
+<tr><td>Peripheral Zone I (PZI) – C zone / down one</td><td class="v">+1 s</td></tr>
+<tr><td>Peripheral Zone II (PZII) – D zone / down three</td><td class="v">+3 s</td></tr>
+<tr><td>Miss</td><td class="v">+7 s</td></tr>
+<tr><td>No-shoot or hostage hit (each)</td><td class="v">+7 s</td></tr>
+<tr><td>Falling steel left standing (each plate)</td><td class="v">+7 s</td></tr>
+<tr><td>Procedural penalty (each)</td><td class="v">+3 s</td></tr>
+<tr><td>Target not engaged (scored as two misses)</td><td class="v">+14 s</td></tr>
+</table>
+<p class="small muted">Sources: §4.2.2 p.61-62 (zones, misses), §4.2.2.1 p.62 (falling steel), §4.2.4 p.64 (not engaged), §4.4.2 and §4.4.4 p.68-69 (procedurals, no-shoots). Cover bonuses (§4.2.3) apply only where the stage brief says so.</p>
+<h3>Match result</h3>
+<ul>
+<li>Your match total is the sum of your stage scores. <b>The lowest total wins.</b></li>
+<li><b>Ties</b> go to the shooter with the most HZ hits over the match; if still equal, the place is shared.</li>
+<li>Each stage is also ranked on its own, lowest stage score first.</li>
+</ul>
+<h3>DNF and DQ</h3>
+<ul>
+<li><b>DNF (did not finish):</b> a shooter who does not finish a stage is <b>not ranked overall</b>. Their finished stages still stand and are ranked on those stage results.</li>
+<li><b>DQ (disqualified):</b> unsafe firearm handling is not penalised, it results in immediate disqualification (§4.6, p.72). A disqualified shooter is <b>removed from the match results</b>.</li>
+</ul>
+<h3>Scoring and corrections</h3>
+<ul>
+<li>Range Officers score on their phones; every score sheet shows who scored each stage and when.</li>
+<li>Where the Match Director corrects a score (for example an arithmetic error on a paper sheet), the correction is shown as a footnote on the score sheet and in the results.</li>
+<li>Competitors are given the benefit of any reasonable doubt (§4.4).</li>
+</ul>
+</div></template>
+
 <div id="pdfStage" aria-hidden="true"></div>
 <script>
 /* ===================== FIREBASE CONFIG – FILL IN HERE =====================
@@ -83,7 +133,7 @@ var SS_FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.14.1/"; /* modular 
 <script>
 /* ===================== score sheet renderer – shared by the app (print / PDF) and the public archive page =====================
    Input is a plain, JSON-safe sheet object (see sheetData in s-sheets.js), so the archive can draw the same layout from published data.
-   d = { match:{name,date,venue,md}, neg, ver, sh:{name,no,member,squad,divs,cat,visitor}, rows:[{no,title,none}|{no,title,hz,pz1,pz2,miss,standing,pen,ns,time,penT,score,place,by,at,sigKey}], ov:{total,place,of,label}, method }
+   d = { match:{name,date,venue,md,note}, neg, ver, sh:{name,no,member,squad,divs,cat,visitor}, rows:[{no,title,none,note}|{no,title,note,hz,pz1,pz2,miss,standing,pen,ns,time,penT,score,place,by,at,sigKey}], ov:{total,place,of,label}, method }
    sigs (optional) = { sigKey: dataURL } – the shooter's e-signature column appears only when at least one exists. */
 function shEsc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
 function sheetByText(r){ return r && r.by ? "Scored by " + r.by + (r.at ? " · " + r.at : "") : ""; }
@@ -94,19 +144,22 @@ function sheetRender(d, sigs, printed){
   h += '<table class="shinfo"><tr><th>Shooter</th><td><b>' + e(sh.name) + '</b>' + (sh.visitor ? ' <span class="vis">VISITOR</span>' : "") + '</td><th>Shooter no.</th><td>' + v(sh.no) + '</td></tr>' +
     '<tr><th>Member no.</th><td>' + (sh.member ? e(sh.member) : sh.visitor ? "Visitor (not a club member)" : "") + '</td><th>Squad</th><td>' + v(sh.squad) + '</td></tr>' +
     '<tr><th>Division(s)</th><td colspan="3">' + e(sh.divs) + (sh.cat ? ' · Category: ' + e(sh.cat) : "") + '</td></tr></table>';
+  var fns = [], fnOf = function(r){ if(!r || !r.note) return ""; fns.push({ no: r.no, text: r.note }); return '<sup class="fn">' + fns.length + '</sup>'; };
   var cols = 12 + (anySig ? 1 : 0);
   h += '<table class="shst"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th>Steel standing</th><th>Proc. / pen.</th><th>No-shoot</th><th>Raw time</th><th>' + (d.neg ? "Penalty time" : "Penalty pts") + '</th><th>Stage score</th><th>Place</th>' + (anySig ? '<th>Shooter e-sig.</th>' : "") + '</tr>';
   (d.rows || []).forEach(function(r){
     var name = '<b>' + e(r.no) + '</b> ' + e(r.title);
-    if(r.none){ h += '<tr><td>' + name + '</td><td colspan="' + (cols - 1) + '" class="c">Not scored</td></tr>'; return; }
+    if(r.none){ h += '<tr><td>' + name + '</td><td colspan="' + (cols - 1) + '" class="c">Not scored' + fnOf(r) + '</td></tr>'; return; }
     var sg = sigOf(r);
     h += '<tr><td>' + name + '</td>' + ["hz", "pz1", "pz2", "miss", "standing", "pen", "ns", "time", "penT"].map(function(k){ return '<td class="n">' + v(r[k]) + '</td>'; }).join("") +
-      '<td class="n"><b>' + v(r.score) + '</b></td><td class="n">' + v(r.place) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
+      '<td class="n"><b>' + v(r.score) + '</b>' + fnOf(r) + '</td><td class="n">' + v(r.place) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
     if(r.by) h += '<tr class="shby"><td></td><td colspan="' + (cols - 1) + '">' + e(sheetByText(r)) + (r.dev ? ' <span class="muted">(' + e(r.dev) + ')</span>' : "") + '</td></tr>';
   });
   h += '</table>';
   var ov = d.ov;
   if(ov) h += '<table class="shtot"><tr><th>Match total</th><td><b>' + e(ov.total) + '</b></td><th>Overall place</th><td><b>' + e(ov.place) + '</b>' + (ov.of && /^\d/.test(ov.place) ? ' of ' + e(ov.of) : "") + '</td></tr></table>';
+  if(fns.length) h += '<ol class="shfn">' + fns.map(function(f){ return '<li>Stage ' + e(f.no) + ': ' + e(f.text) + '</li>'; }).join("") + '</ol>';
+  if(m.note) h += '<div class="shmnote"><b>Match note:</b> ' + e(m.note) + '</div>';
   h += '<div class="shnote">' + (ov ? e(ov.label) + ' · ' : "") + e(d.method || "") + '. Every score is stamped digitally on the scoring phone with the Range Officer’s name and the time' + (anySig ? '; e-sig. = the shooter’s signature captured on the scoring phone' : "") + '.</div>';
   h += '<div class="shfoot">Spectre Scoring ' + e(d.ver || "") + (printed ? ' · ' + e(printed) : "") + '</div></div>';
   return h;
@@ -115,6 +168,7 @@ function sheetRender(d, sigs, printed){
 </script>
 <script>
 (function(){
+  var RULES_HTML = document.getElementById("rulesTpl").innerHTML;
   var F = null, db = null, CUR = null, app = document.getElementById("app"), e = shEsc;
   function sdk(){
     if(db) return Promise.resolve();
@@ -146,7 +200,8 @@ function sheetRender(d, sigs, printed){
     });
   }
   function sheetObj(m, s){ var d = JSON.parse(JSON.stringify(s)); d.match = m.match; d.neg = m.neg; d.method = m.method; d.ver = m.ver; return d; }
-  function head(m){ return '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(m.match.name) + '</h2><div class="small muted">' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + (m.match.md ? ' · Match Director: ' + e(m.match.md) : "") + ' · published ' + e(String(m.publishedAt || "").slice(0, 16).replace("T", " ")) + ' UTC</div></div><a class="btn noprint" href="#">All matches</a></div></div>'; }
+  function head(m){ return '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(m.match.name) + '</h2><div class="small muted">' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + (m.match.md ? ' · Match Director: ' + e(m.match.md) : "") + ' · published ' + e(String(m.publishedAt || "").slice(0, 16).replace("T", " ")) + ' UTC</div>' + (m.match.note ? '<div class="mnote"><b>Match note:</b> ' + e(m.match.note) + '</div>' : "") + '</div><a class="btn noprint" href="#">All matches</a></div></div>'; }
+  function notesHTML(m){ var n = m.notes || []; return n.length ? '<h3>Notes</h3><ol class="anotes">' + n.map(function(x){ return '<li>Stage ' + e(x.stage) + ' · ' + e(x.shooter) + ': ' + e(x.text) + '</li>'; }).join("") + '</ol>' : ""; }
   function showMatch(id, q){
     app.innerHTML = '<div class="card">Loading…</div>';
     loadMatch(id).then(function(m){
@@ -170,7 +225,7 @@ function sheetRender(d, sigs, printed){
   function resultsHTML(m, i){ var tb = m.tables || [], t = tb[i];
     var h = '<div class="restabs noprint">' + tb.map(function(x, j){ return '<a class="btn' + (j === i ? ' on" style="background:#14284b;color:#fff' : "") + '" href="#m=' + encodeURIComponent(m.id) + '&r=' + j + '">' + e(x.t) + '</a>'; }).join(" ") + '</div>';
     if(t) h += '<h3>' + e(t.t) + '</h3><div class="small muted">' + e(t.s) + '</div><div class="scroll"><table class="restable"><tr>' + t.h.map(function(c){ return '<th>' + e(c) + '</th>'; }).join("") + '</tr>' + (t.r.length ? t.r.map(function(r){ return '<tr>' + r.map(function(c){ return '<td>' + e(c) + '</td>'; }).join("") + '</tr>'; }).join("") : '<tr><td colspan="' + t.h.length + '">No scores.</td></tr>') + '</table></div>';
-    return h; }
+    return h + notesHTML(m); }
   function showResults(id, i){
     loadMatch(id).then(function(m){ i = Math.max(0, Math.min(+i || 0, (m.tables || []).length - 1));
       app.innerHTML = head(m) + '<div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(id) + '">Score sheets</a><button type="button" class="primary" id="resPdf">Download full results (PDF)</button></div><div class="card" id="resView">' + resultsHTML(m, i) + '</div>';
@@ -201,6 +256,8 @@ function sheetRender(d, sigs, printed){
   window.SSA = { pdfSheets: pdfSheets, pdfResults: pdfResults, get cur(){ return CUR; } };
   /* ---------- router ---------- */
   function route(){ var h = hash(); window.scrollTo(0, 0);
+    var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; document.getElementById("navRes").className = rules ? "" : "on";
+    if(rules){ app.innerHTML = RULES_HTML; return; }
     if(h.m && h.s) return showSheet(h.m, h.s);
     if(h.m && h.r != null) return showResults(h.m, h.r);
     if(h.m) return showMatch(h.m, h.q);
