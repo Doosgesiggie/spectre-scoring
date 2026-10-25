@@ -2785,6 +2785,7 @@ function regInner(){
     '<ul class="list-plain small" style="margin-top:8px">' + sq + '</ul>' +
     '<div class="grid2" style="margin-top:8px"><button type="button" id="regCloseB">' + (r.closed ? "Reopen" : "Close now") + '</button><button type="button" id="regEditB">Edit…</button></div>' +
     '<div class="grid2" style="margin-top:8px"><button type="button" id="regCsvB"' + (REGRT.entries.length ? "" : " disabled") + '>Export CSV</button><button type="button" class="primary" id="regImpB"' + (act.length ? "" : " disabled") + '>Import as shooters</button></div>' +
+    '<div class="grid2" style="margin-top:8px"><button type="button" id="regIndB"' + (act.length ? "" : " disabled") + '>Print indemnity forms (PDF)</button><button type="button" id="regIndSqB"' + (act.length ? "" : " disabled") + '>Indemnity forms per squad</button></div>' +
     '<details style="margin-top:10px"' + (REG.openList ? " open" : "") + ' id="regListD"><summary>Entries (' + REGRT.entries.length + ')</summary><ul class="list-plain small">' +
     regEntriesSorted().map(function(e){ var gone = e.status !== "active";
       return '<li class="row" style="' + (gone ? "opacity:.55" : "") + '"><span class="grow"><b>' + esc(e.first + " " + e.last) + '</b>' + (gone ? " · " + esc(e.status) : "") + '<br>' + esc([r.squads[e.squad] ? r.squads[e.squad].n : e.squad, regDivsText(e), e.cls, e.cat, e.visitor ? "Visitor" : e.member ? "SWPC " + e.member : ""].filter(Boolean).join(" · ")) + (e.email ? '<br><span class="muted">' + esc(e.email) + '</span>' : "") + '</span>' +
@@ -2807,6 +2808,8 @@ function regBind(){
     if(b.id === "regCloseB") regUpdate({ closed: !REGRT.reg.closed }).then(function(){ toast(REGRT.reg && REGRT.reg.closed ? "Registration reopened" : "Registration closed"); });
     if(b.id === "regCsvB") shareOrDownload(slugify(REGRT.reg.name) + "-registrations.csv", regCSV(REGRT.reg, regEntriesSorted()), "text/csv");
     if(b.id === "regImpB") regImport();
+    if(b.id === "regIndB") indemPrint(false);
+    if(b.id === "regIndSqB") indemPrint(true);
     if(b.dataset.regdel){ var en = REGRT.entries.filter(function(x){ return x.tok === b.dataset.regdel; })[0]; ask("Remove " + esc(en.first + " " + en.last) + " from the registration? Their squad slot is freed (you can restore them).", { ok: "Remove", okClass: "danger" }).then(function(ok){ if(ok) regOrgSet(en.tok, { status: "removed" }); }); }
     if(b.dataset.regrestore) regOrgSet(b.dataset.regrestore, { status: "active" });
     if(b.id === "regForgetB") ask("Forget registration " + REG.code + " on this phone? It stays online.", { ok: "Forget" }).then(function(ok){ if(ok){ regUnwatch(); REG = { code: "" }; REGRT.reg = null; REGRT.entries = []; regSave(); regPaint(); } });
@@ -2987,6 +2990,62 @@ function moveSelected(){
   askSquad("Move " + ids.length + " selected shooter" + (ids.length === 1 ? "" : "s") + " to which squad?" + (nsc ? " (" + nsc + " already have scores – they stay with them.)" : "")).then(function(v){
     if(v == null) return; v = v.trim(); var m = {}; ids.forEach(function(id){ m[id] = v; }); SEL = null; moveShooters(m, "Moved to squad " + v);
   });
+}
+/* s-indemnity.js – SWPC Range Booking Register & Indemnity Form, pre-filled from the registration.
+   Overlays text onto the club's original PDF (legal text untouched) with pdf-lib, entirely on this phone.
+   Fills: date, match/squad remark, SWPC member no, name. ID number, contact number and signature are
+   ALWAYS left blank – handwritten on paper on the day; the app never collects or stores them. */
+var INDEM = { rows: 10, lib: null,
+  /* PDF user-space (page is rotated 90°; text drawn rotated so it reads across the landscape page) */
+  rowX: function(i){ return 350 + i * 20.05 + 14; },
+  colY: { member: 33, name: 142 } };
+function indemLib(){
+  if(window.PDFLib) return Promise.resolve(window.PDFLib);
+  if(!INDEM.lib) INDEM.lib = new Promise(function(ok, no){ var s = document.createElement("script"); s.src = "indemnity-pdf.js"; s.onload = function(){ ok(window.PDFLib); }; s.onerror = function(){ INDEM.lib = null; no(new Error("Could not load the PDF maker – check the signal.")); }; document.head.appendChild(s); });
+  return INDEM.lib;
+}
+/* active entries → pages; perSquad starts a new page at each squad */
+function indemPages(reg, entries, perSquad){
+  var act = entries.filter(function(e){ return e.status === "active"; }).sort(function(a, b){
+    return String(a.squad).localeCompare(String(b.squad), undefined, { numeric: true }) || (a.last + " " + a.first).localeCompare(b.last + " " + b.first); });
+  var pages = [], cur = null;
+  act.forEach(function(e){
+    var sq = reg.squads && reg.squads[e.squad] ? reg.squads[e.squad].n : (e.squad || "");
+    if(!cur || cur.rows.length >= INDEM.rows || (perSquad && cur.squad !== sq)){ cur = { squad: perSquad ? sq : "", rows: [] }; pages.push(cur); }
+    cur.rows.push({ member: e.visitor ? "" : String(e.member || ""), name: (String(e.first || "") + " " + String(e.last || "")).trim() });
+  });
+  pages.push({ squad: perSquad ? "Walk-ins" : "", rows: [], blank: true }); /* spare blank sheet for walk-ins */
+  return pages;
+}
+function indemFit(font, s, size, max){ s = String(s).replace(/[^\x20-\x7E\u00A0-\u00FF]/g, "?"); while(s.length && font.widthOfTextAtSize(s, size) > max) s = s.slice(0, -1); return s; }
+function indemBuild(reg, entries, perSquad, formBytes){
+  return indemLib().then(function(L){
+    return Promise.all([L.PDFDocument.create(), L.PDFDocument.load(formBytes)]).then(function(d){
+      var out = d[0], src = d[1], pages = indemPages(reg, entries, perSquad);
+      return out.embedFont(L.StandardFonts.Helvetica).then(function(font){
+        return out.copyPages(src, pages.map(function(){ return 0; })).then(function(cp){
+          var white = L.rgb(1, 1, 1), ink = L.rgb(0.05, 0.1, 0.3), rot = L.degrees(90);
+          function t(pg, s, x, y, size, max){ s = indemFit(font, s, size, max); if(s) pg.drawText(s, { x: x, y: y, size: size, font: font, color: ink, rotate: rot }); }
+          var date = /^\d{4}-\d{2}-\d{2}$/.test(reg.date || "") ? reg.date : "";
+          cp.forEach(function(pg, i){
+            out.addPage(pg); var p = pages[i];
+            if(date){ pg.drawRectangle({ x: 93, y: 155, width: 18.5, height: 202, color: white }); t(pg, date, 106, 160, 10, 195); }
+            var rem = [reg.name, reg.venue, p.squad, "Sheet " + (i + 1) + " of " + pages.length].filter(Boolean).join("  ·  ");
+            t(pg, rem, 233, 158, 9, 600);
+            p.rows.forEach(function(r, k){ var x = INDEM.rowX(k); t(pg, r.member, x, INDEM.colY.member, 9, 48); t(pg, r.name, x, INDEM.colY.name, 10, 212); });
+          });
+          return out.save();
+        });
+      });
+    });
+  });
+}
+function indemPrint(perSquad){
+  var reg = REGRT.reg; if(!reg) return;
+  return fetch("indemnity-form.pdf").then(function(r){ if(!r.ok) throw new Error("Could not load the indemnity form."); return r.arrayBuffer(); })
+    .then(function(b){ return indemBuild(reg, REGRT.entries, perSquad, b); })
+    .then(function(bytes){ return shareOrDownload(slugify(reg.name) + "-indemnity-forms.pdf", bytes, "application/pdf"); })
+    .catch(function(e){ alertMsg(e.message || String(e)); });
 }
 /* ===================== score sheet renderer – shared by the app (print / PDF) and the public archive page =====================
    Input is a plain, JSON-safe sheet object (see sheetData in s-sheets.js), so the archive can draw the same layout from published data.
