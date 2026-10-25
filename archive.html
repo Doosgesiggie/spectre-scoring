@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spectre Scoring – Score sheet archive</title>
+<meta name="description" content="Spectre Tactical Shooting – published match results and per-shooter score sheets">
+<meta name="theme-color" content="#14284b">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<style>
+:root{--navy:#14284b;--border:#c9d2e0;--muted:#5a6475;--cond:"Arial Narrow","Roboto Condensed",Arial,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:#eef1f6;color:#111;font-size:16px}
+header{background:var(--navy);color:#fff;padding:12px 16px}
+header h1{margin:0;font-size:1.2em;font-family:var(--cond);text-transform:uppercase;letter-spacing:.03em}
+header .sub{font-size:.85em;opacity:.85}
+main{max-width:980px;margin:0 auto;padding:12px}
+.card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:10px 0}
+.muted{color:var(--muted)}.small{font-size:.85em}
+button,.btn{font:inherit;font-size:.92em;padding:8px 12px;border-radius:8px;border:1.5px solid var(--navy);background:#fff;color:var(--navy);cursor:pointer;text-decoration:none;display:inline-block}
+button.primary{background:var(--navy);color:#fff}
+button:disabled{opacity:.5}
+input[type=search]{font:inherit;width:100%;padding:10px;border:1.5px solid var(--border);border-radius:8px}
+ul.matches,ul.shooters{list-style:none;margin:0;padding:0}
+ul.matches li{border-top:1px solid var(--border);padding:10px 0;display:flex;gap:10px;align-items:center}
+ul.matches li:first-child,ul.shooters li:first-child{border-top:0}
+ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grow{flex:1;min-width:150px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.restabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.restabs button.on{background:var(--navy);color:#fff}
+.restable{border-collapse:collapse;font-size:13px;width:100%}
+.restable th,.restable td{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left;white-space:nowrap}
+.scroll{overflow-x:auto}
+.paper{background:#fff;width:210mm;max-width:100%;padding:10mm;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.15);overflow-x:auto}
+#pdfStage{position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:38px}
+.err{color:#a00}
+/* sheet layout (shared with the app) */
+.sheet{font-size:10pt;color:#000;background:#fff}
+.sheet h1{font-size:15pt;margin:0 0 1mm}
+.sheet table{border-collapse:collapse;width:100%}
+.sheet th,.sheet td{border:0.6pt solid #000;padding:1mm 1.4mm;text-align:left;vertical-align:middle}
+.sheet td.n{text-align:right}.sheet td.c{text-align:center}
+.sheet .shhead{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1.5pt solid #000;padding-bottom:2mm;margin-bottom:3mm}
+.sheet .shtag{font-family:var(--cond,"Arial Narrow",Arial,sans-serif);font-size:14pt;font-weight:900;text-transform:uppercase}
+.sheet .shinfo th,.sheet .shtot th{width:18%;background:#eee}
+.sheet .shinfo,.sheet .shst,.sheet .shtot{margin-bottom:3mm}
+.sheet .shst{font-size:8.6pt}
+.sheet .shst th{background:#eee;font-size:7.8pt;text-align:center}
+.sheet .shst tr.shby td{border-top:0;font-size:7.6pt;color:#333;padding-top:0.4mm;padding-bottom:0.6mm}
+.sheet .shst tr.shby td:first-child{border-top:0}
+.sheet .muted{color:#666}
+.sheet .shtot td{font-size:12pt}
+.sheet .vis{border:1pt solid #000;padding:0 1.5mm;font-size:8pt;font-weight:700}
+.sheet .esig{height:9mm;max-width:28mm;object-fit:contain}
+.sheet .shnote{font-size:8pt;color:#333}
+.sheet .shfoot{margin-top:6mm;font-size:7.5pt;color:#555}
+
+@media print{header,.noprint{display:none!important}body{background:#fff}main{padding:0;max-width:none}.paper{box-shadow:none;margin:0;padding:0;width:auto}.card{border:0}}
+</style>
+</head>
+<body>
+<header><h1>Spectre Tactical Shooting – score sheet archive</h1><div class="sub">Published match results. Find your name to view or download your score sheet.</div></header>
+<main id="app"><div class="card">Loading…</div></main>
+<div id="pdfStage" aria-hidden="true"></div>
+<script>
+/* ===================== FIREBASE CONFIG – FILL IN HERE =====================
+   Live sync is optional. Filled in 24 Oct 2026 for project spectre-scoring-5ddda (Firestore africa-south1). If they are ever cleared/placeholdered
+   (Firebase console → Project settings → Your apps → Web app → SDK setup → Config),
+   the "Live sync" switch stays disabled and the app works exactly as before.
+   Only apiKey, authDomain, projectId and appId are used. These values are not secret;
+   access is controlled by firestore.rules + Anonymous Auth.                          */
+var SS_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBxXZ-OuYOYHf-QDnH9k0Gr28bnI5t0T-w",
+  authDomain: "spectre-scoring-5ddda.firebaseapp.com",
+  projectId: "spectre-scoring-5ddda",
+  appId: "1:318620464890:web:568f4a9f1ed9408f1afb43"
+};
+var SS_FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.14.1/"; /* modular ESM, loaded only when live sync is switched on */
+/* ========================================================================== */
+
+</script>
+<script>
+/* ===================== score sheet renderer – shared by the app (print / PDF) and the public archive page =====================
+   Input is a plain, JSON-safe sheet object (see sheetData in s-sheets.js), so the archive can draw the same layout from published data.
+   d = { match:{name,date,venue,md}, neg, ver, sh:{name,no,member,squad,divs,cat,visitor}, rows:[{no,title,none}|{no,title,hz,pz1,pz2,miss,standing,pen,ns,time,penT,score,place,by,at,sigKey}], ov:{total,place,of,label}, method }
+   sigs (optional) = { sigKey: dataURL } – the shooter's e-signature column appears only when at least one exists. */
+function shEsc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+function sheetByText(r){ return r && r.by ? "Scored by " + r.by + (r.at ? " · " + r.at : "") : ""; }
+function sheetRender(d, sigs, printed){
+  var e = shEsc, m = d.match || {}, sh = d.sh || {}, v = function(x){ return x == null || x === "" ? "" : e(x); };
+  var sigOf = function(r){ return r && r.sigKey && sigs ? sigs[r.sigKey] : null; }, anySig = (d.rows || []).some(function(r){ return !!sigOf(r); });
+  var h = '<div class="sheet"><div class="shhead"><div><h1>' + e(m.name) + '</h1><div>' + e(m.date) + (m.venue ? ' · ' + e(m.venue) : "") + (m.md ? ' · Match Director: ' + e(m.md) : "") + '</div></div><div class="shtag">Score sheet</div></div>';
+  h += '<table class="shinfo"><tr><th>Shooter</th><td><b>' + e(sh.name) + '</b>' + (sh.visitor ? ' <span class="vis">VISITOR</span>' : "") + '</td><th>Shooter no.</th><td>' + v(sh.no) + '</td></tr>' +
+    '<tr><th>Member no.</th><td>' + (sh.member ? e(sh.member) : sh.visitor ? "Visitor (not a club member)" : "") + '</td><th>Squad</th><td>' + v(sh.squad) + '</td></tr>' +
+    '<tr><th>Division(s)</th><td colspan="3">' + e(sh.divs) + (sh.cat ? ' · Category: ' + e(sh.cat) : "") + '</td></tr></table>';
+  var cols = 12 + (anySig ? 1 : 0);
+  h += '<table class="shst"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th>Steel standing</th><th>Proc. / pen.</th><th>No-shoot</th><th>Raw time</th><th>' + (d.neg ? "Penalty time" : "Penalty pts") + '</th><th>Stage score</th><th>Place</th>' + (anySig ? '<th>Shooter e-sig.</th>' : "") + '</tr>';
+  (d.rows || []).forEach(function(r){
+    var name = '<b>' + e(r.no) + '</b> ' + e(r.title);
+    if(r.none){ h += '<tr><td>' + name + '</td><td colspan="' + (cols - 1) + '" class="c">Not scored</td></tr>'; return; }
+    var sg = sigOf(r);
+    h += '<tr><td>' + name + '</td>' + ["hz", "pz1", "pz2", "miss", "standing", "pen", "ns", "time", "penT"].map(function(k){ return '<td class="n">' + v(r[k]) + '</td>'; }).join("") +
+      '<td class="n"><b>' + v(r.score) + '</b></td><td class="n">' + v(r.place) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
+    if(r.by) h += '<tr class="shby"><td></td><td colspan="' + (cols - 1) + '">' + e(sheetByText(r)) + (r.dev ? ' <span class="muted">(' + e(r.dev) + ')</span>' : "") + '</td></tr>';
+  });
+  h += '</table>';
+  var ov = d.ov;
+  if(ov) h += '<table class="shtot"><tr><th>Match total</th><td><b>' + e(ov.total) + '</b></td><th>Overall place</th><td><b>' + e(ov.place) + '</b>' + (ov.of && /^\d/.test(ov.place) ? ' of ' + e(ov.of) : "") + '</td></tr></table>';
+  h += '<div class="shnote">' + (ov ? e(ov.label) + ' · ' : "") + e(d.method || "") + '. Every score is stamped digitally on the scoring phone with the Range Officer’s name and the time' + (anySig ? '; e-sig. = the shooter’s signature captured on the scoring phone' : "") + '.</div>';
+  h += '<div class="shfoot">Spectre Scoring ' + e(d.ver || "") + (printed ? ' · ' + e(printed) : "") + '</div></div>';
+  return h;
+}
+
+</script>
+<script>
+(function(){
+  var F = null, db = null, CUR = null, app = document.getElementById("app"), e = shEsc;
+  function sdk(){
+    if(db) return Promise.resolve();
+    var cfg = window.SS_FIREBASE_TEST || window.SS_FIREBASE_CONFIG, base = window.SS_FIREBASE_SDK;
+    return Promise.all([import(base + "firebase-app.js"), import(base + "firebase-firestore.js")]).then(function(m){
+      var a = m[0].initializeApp(cfg, "archive"); F = m[1]; db = F.getFirestore(a);
+      if(cfg.emulator) F.connectFirestoreEmulator(db, cfg.emulator, 8085);
+    });
+  }
+  function hash(){ var o = {}; location.hash.replace(/^#/, "").split("&").forEach(function(p){ var kv = p.split("="); if(kv[0]) o[kv[0]] = decodeURIComponent(kv[1] || ""); }); return o; }
+  function go(h){ location.hash = h; }
+  function fail(er){ app.innerHTML = '<div class="card err">Could not load the archive: ' + e(er && er.message || er) + '</div><div class="card"><a class="btn" href="#">Back to the list</a></div>'; }
+  function slug(s){ return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "sheet"; }
+  /* ---------- list ---------- */
+  function showList(){
+    app.innerHTML = '<div class="card">Loading the published matches…</div>';
+    sdk().then(function(){ return F.getDocs(F.query(F.collection(db, "archive"), F.where("hidden", "==", false))); }).then(function(q){
+      var list = q.docs.map(function(d){ var x = d.data(); x.id = d.id; return x; }).sort(function(a, b){ return String(b.date).localeCompare(String(a.date)) || String(b.publishedAt).localeCompare(String(a.publishedAt)); });
+      app.innerHTML = '<div class="card"><h2 style="margin-top:0">Published matches</h2>' + (list.length ? '<ul class="matches" id="mList">' + list.map(function(m){
+        return '<li><div class="grow"><b>' + e(m.matchName) + '</b><br><span class="small muted">' + e(m.date) + (m.venue ? ' · ' + e(m.venue) : "") + ' · ' + e(m.shooters) + ' shooters · ' + e(m.stages) + ' stages</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '" data-m="' + e(m.id) + '">Open</a></li>'; }).join("") + '</ul>' : '<p class="muted">No matches published yet.</p>') + '</div>';
+    }).catch(fail);
+  }
+  /* ---------- one match ---------- */
+  function loadMatch(id){
+    if(CUR && CUR.id === id) return Promise.resolve(CUR);
+    return sdk().then(function(){ return F.getDoc(F.doc(db, "archive", id, "data", "main")); }).then(function(d){
+      if(!d.exists() || !d.data().data) throw new Error("This match is not in the archive (it may have been unpublished).");
+      CUR = JSON.parse(d.data().data); CUR.id = id; return CUR;
+    });
+  }
+  function sheetObj(m, s){ var d = JSON.parse(JSON.stringify(s)); d.match = m.match; d.neg = m.neg; d.method = m.method; d.ver = m.ver; return d; }
+  function head(m){ return '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(m.match.name) + '</h2><div class="small muted">' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + (m.match.md ? ' · Match Director: ' + e(m.match.md) : "") + ' · published ' + e(String(m.publishedAt || "").slice(0, 16).replace("T", " ")) + ' UTC</div></div><a class="btn noprint" href="#">All matches</a></div></div>'; }
+  function showMatch(id, q){
+    app.innerHTML = '<div class="card">Loading…</div>';
+    loadMatch(id).then(function(m){
+      app.innerHTML = head(m) + '<div class="card"><label for="q"><b>Find your name</b></label><input type="search" id="q" placeholder="Type part of your name" value="' + e(q || "") + '" autocomplete="off"><ul class="shooters" id="shList"></ul></div>' +
+        '<div class="card row"><a class="btn" href="#m=' + encodeURIComponent(id) + '&r=0">Full results</a><button type="button" id="allPdf">Download all score sheets (PDF)</button></div>';
+      var paint = function(){ var t = document.getElementById("q").value.trim().toLowerCase();
+        var rows = m.sheets.filter(function(s){ return !t || (s.sh.name + " " + s.sh.no).toLowerCase().indexOf(t) >= 0; });
+        document.getElementById("shList").innerHTML = rows.length ? rows.map(function(s){ return '<li><div class="grow"><b>' + e(s.sh.name) + '</b> <span class="small muted">' + (s.sh.no ? "#" + e(s.sh.no) + " · " : "") + (s.sh.squad ? "squad " + e(s.sh.squad) + " · " : "") + e(s.sh.divs) + '</span><br><span class="small">' + (s.ov && /^\d+$/.test(String(s.ov.place)) ? 'Total ' + e(s.ov.total) + ' · place ' + e(s.ov.place) : e(s.ov ? s.ov.place : "")) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(id) + '&s=' + encodeURIComponent(s.sh.id) + '">View sheet</a><button type="button" class="primary" data-pdf="' + e(s.sh.id) + '">PDF</button></li>'; }).join("") : '<li class="muted">No shooter matches “' + e(t) + '”.</li>'; };
+      document.getElementById("q").oninput = paint; paint();
+      document.getElementById("shList").onclick = function(ev){ var b = ev.target.closest("[data-pdf]"); if(b) pdfSheets(m, m.sheets.filter(function(s){ return s.sh.id === b.dataset.pdf; }), b); };
+      document.getElementById("allPdf").onclick = function(){ pdfSheets(m, m.sheets, this); };
+    }).catch(fail);
+  }
+  function showSheet(id, sid){
+    loadMatch(id).then(function(m){ var s = m.sheets.filter(function(x){ return x.sh.id === sid; })[0]; if(!s) throw new Error("Shooter not found in this match.");
+      app.innerHTML = '<div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(id) + '">Back to ' + e(m.match.name) + '</a><button type="button" class="primary" id="onePdf">Download PDF</button><button type="button" id="prt">Print</button></div><div class="paper" id="sheetView">' + sheetRender(sheetObj(m, s), null, "published " + String(m.publishedAt || "").slice(0, 10)) + '</div>';
+      document.getElementById("onePdf").onclick = function(){ pdfSheets(m, [s], this); };
+      document.getElementById("prt").onclick = function(){ window.print(); };
+    }).catch(fail);
+  }
+  function resultsHTML(m, i){ var tb = m.tables || [], t = tb[i];
+    var h = '<div class="restabs noprint">' + tb.map(function(x, j){ return '<a class="btn' + (j === i ? ' on" style="background:#14284b;color:#fff' : "") + '" href="#m=' + encodeURIComponent(m.id) + '&r=' + j + '">' + e(x.t) + '</a>'; }).join(" ") + '</div>';
+    if(t) h += '<h3>' + e(t.t) + '</h3><div class="small muted">' + e(t.s) + '</div><div class="scroll"><table class="restable"><tr>' + t.h.map(function(c){ return '<th>' + e(c) + '</th>'; }).join("") + '</tr>' + (t.r.length ? t.r.map(function(r){ return '<tr>' + r.map(function(c){ return '<td>' + e(c) + '</td>'; }).join("") + '</tr>'; }).join("") : '<tr><td colspan="' + t.h.length + '">No scores.</td></tr>') + '</table></div>';
+    return h; }
+  function showResults(id, i){
+    loadMatch(id).then(function(m){ i = Math.max(0, Math.min(+i || 0, (m.tables || []).length - 1));
+      app.innerHTML = head(m) + '<div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(id) + '">Score sheets</a><button type="button" class="primary" id="resPdf">Download full results (PDF)</button></div><div class="card" id="resView">' + resultsHTML(m, i) + '</div>';
+      document.getElementById("resPdf").onclick = function(){ pdfResults(m, this); };
+    }).catch(fail);
+  }
+  /* ---------- PDF (in the browser: html2canvas + jsPDF, loaded on first use) ---------- */
+  var libP = null;
+  function pdfLib(){ if(window.jspdf && window.html2canvas) return Promise.resolve(); if(libP) return libP;
+    libP = new Promise(function(ok, no){ var s = document.createElement("script"); s.src = "archive-pdf.js"; s.onload = ok; s.onerror = function(){ libP = null; no(new Error("Could not load the PDF maker – check the signal.")); }; document.head.appendChild(s); }); return libP; }
+  /* each block = one page (sheet) or a long block sliced into A4 pages (results) */
+  function pdfBlocks(htmls, name, btn){
+    var old = btn && btn.textContent; if(btn){ btn.disabled = true; btn.textContent = "Making PDF…"; }
+    var stage = document.getElementById("pdfStage");
+    return pdfLib().then(function(){
+      var pdf = new window.jspdf.jsPDF({ unit: "mm", format: "a4", orientation: "portrait" }), first = true, W = 210, H = 297;
+      return htmls.reduce(function(p, html){ return p.then(function(){ stage.innerHTML = html;
+        return window.html2canvas(stage, { scale: 2, backgroundColor: "#ffffff", logging: false }).then(function(c){
+          var pxPerMm = c.width / W, pageH = Math.floor(H * pxPerMm), y = 0;
+          while(y < c.height){ var h = Math.min(pageH, c.height - y), part = document.createElement("canvas"); part.width = c.width; part.height = h;
+            part.getContext("2d").drawImage(c, 0, y, c.width, h, 0, 0, c.width, h);
+            if(!first) pdf.addPage(); first = false; pdf.addImage(part.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, W, h / pxPerMm); y += pageH; }
+        }); }); }, Promise.resolve()).then(function(){ stage.innerHTML = ""; window.__lastPdf = { name: name, pages: pdf.getNumberOfPages() }; pdf.save(name); });
+    }).catch(function(er){ alert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.textContent = old; } });
+  }
+  function pdfSheets(m, list, btn){ return pdfBlocks(list.map(function(s){ return sheetRender(sheetObj(m, s), null, "published " + String(m.publishedAt || "").slice(0, 10)); }), slug(m.match.name) + "-" + (list.length === 1 ? slug(list[0].sh.name) : "score-sheets") + ".pdf", btn); }
+  function pdfResults(m, btn){ return pdfBlocks((m.tables || []).map(function(t, i){ return '<div class="sheet"><div class="shhead"><div><h1>' + e(m.match.name) + '</h1><div>' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + '</div></div><div class="shtag">Results</div></div>' + resultsHTML(m, i).replace(/<div class="restabs noprint">[\s\S]*?<\/div>/, "") + '</div>'; }), slug(m.match.name) + "-results.pdf", btn); }
+  window.SSA = { pdfSheets: pdfSheets, pdfResults: pdfResults, get cur(){ return CUR; } };
+  /* ---------- router ---------- */
+  function route(){ var h = hash(); window.scrollTo(0, 0);
+    if(h.m && h.s) return showSheet(h.m, h.s);
+    if(h.m && h.r != null) return showResults(h.m, h.r);
+    if(h.m) return showMatch(h.m, h.q);
+    showList(); }
+  window.addEventListener("hashchange", route); route();
+})();
+</script>
+</body>
+</html>
