@@ -694,6 +694,170 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
 
 </script>
 <script>
+/* Results packs for results-only (kind:"results") archive records, the season standings PDF and the participation summary.
+   Standalone: reuses (read-only) VPC, vpDate, vpDocKit from vpdf-pack.js; nothing there is changed. Exposes window.ROPACK. */
+(function(){
+function nkey(n){ var s=String(n||"").trim().replace(/\s+/g," "),c=/^([^,]+),\s*(.+)$/.exec(s); if(c) s=c[2]+" "+c[1]; return s.toLowerCase(); }
+function f2(n){ return n==null?"":(Math.round(n*100)/100).toFixed(2); }
+function ordn(n){ var s=["th","st","nd","rd"],v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
+function places(d){ var rs=d.rows.filter(function(r){return r.val!=null;}).slice().sort(function(a,b){return d.high?b.val-a.val:a.val-b.val;});
+  rs.forEach(function(r,i){ r._pl=i>0&&r.val===rs[i-1].val?rs[i-1]._pl:i+1; }); return { ranked: rs, dnf: d.rows.filter(function(r){return r.val==null;}) }; }
+/* shoot points, same rules as the live archive standings */
+function roPoints(d){
+  if(d.stageRes){ var rr=d.stageRes.rows, ok=rr.filter(function(r){return !r.status&&r.total>0;}), o={}, bt=Math.min.apply(null,ok.map(function(r){return r.total;}));
+    rr.forEach(function(r){ o[nkey(r.name)]= r.status?{name:r.name,pct:0,why:r.status}:{name:r.name,pct:Math.round(bt/r.total*10000)/100}; }); return o; }
+  var ds=d.disciplines||[], mode=d.standings||"avg", per={}, out={};
+  ds.forEach(function(x){ var vs=x.rows.map(function(r){return r.val;}).filter(function(v){return v>0;}); if(!vs.length) return; var best=x.high?Math.max.apply(null,vs):Math.min.apply(null,vs);
+    x.rows.forEach(function(r){ var k=nkey(r.name),p=per[k]=per[k]||{name:r.name,d:{}}; p.d[x.id]=r.val>0?(x.high?r.val/best:best/r.val)*100:0; }); });
+  var use=ds.filter(function(x){return mode==="avg"||x.id===mode;});
+  Object.keys(per).forEach(function(k){ var p=per[k], v=use.map(function(x){return p.d[x.id]||0;}), s=mode==="avg"?v.reduce(function(a,b){return a+b;},0)/(v.length||1):v.reduce(function(a,b){return a+b;},0);
+    if(!use.some(function(x){return p.d[x.id]!=null;})) return; out[k]={name:p.name,pct:Math.round(s*100)/100,d:p.d}; });
+  return out; }
+function fullPoints(d){ var out={}, rk=[]; (d.sheets||[]).forEach(function(s){ var ok=s.ov&&/^\d+/.test(String(s.ov.place)), t=ok?parseFloat(String(s.ov.total)):null; if(t>0) rk.push({s:s,t:t}); else out[nkey(s.sh.name)]={name:s.sh.name,pct:0,why:"not ranked"}; });
+  var b=Math.min.apply(null,rk.map(function(r){return r.t;})); rk.forEach(function(r){ out[nkey(r.s.sh.name)]={name:r.s.sh.name,pct:Math.round(b/r.t*10000)/100}; }); return out; }
+function pts(d){ return d.kind==="results"?roPoints(d):fullPoints(d); }
+function standings(ms){ var P={};
+  ms.forEach(function(m){ var sp=pts(m.data); Object.keys(sp).forEach(function(k){ var x=sp[k],p=P[k]=P[k]||{name:x.name,per:{}}; p.per[m.id]=x; }); });
+  var rows=Object.keys(P).map(function(k){ var p=P[k], v=ms.filter(function(m){return p.per[m.id];}).map(function(m){return p.per[m.id].pct;}).sort(function(a,b){return b-a;});
+    return {key:k,name:p.name,per:p.per,shoots:v.length,total:Math.round(v.reduce(function(a,b){return a+b;},0)*100)/100,high:v[0]||0}; });
+  rows.sort(function(a,b){return b.total-a.total||b.shoots-a.shoots||b.high-a.high||a.name.localeCompare(b.name);});
+  rows.forEach(function(r,i){ r.place=i>0&&r.total===rows[i-1].total&&r.shoots===rows[i-1].shoots&&r.high===rows[i-1].high?rows[i-1].place:i+1; }); return rows; }
+function discLabel(m){ var d=m.data;
+  if(d.kind!=="results"){ var f={}; (d.stages||[]).forEach(function(s){(s.firearms||[]).forEach(function(x){f[x]=1;});}); var a=Object.keys(f).map(function(x){return x[0].toUpperCase()+x.slice(1);}); return a.join(", ")+" (multi-gun, "+(d.stages||[]).length+" stages)"; }
+  if(d.stageRes){ var t=/Tactical:\s*([^-]+?)\s*-/.exec(d.source.title||""); return (t?t[1].replace("/"," and "):"")+" (combined, "+d.stageRes.stages.length+" stages)"; }
+  return d.disciplines.map(function(x){ return x.t+(x.stages?" ("+x.stages.length+" stage"+(x.stages.length>1?"s":"")+")":""); }).join(", "); }
+function mdOf(m){ return (m.data.match||{}).md||""; }
+var FOOT_SRC=function(id){ return "Compiled from the original club score sheet  |  Record "+id+"  |  Hit counts not recorded (n/r)"; };
+
+/* ---------- results pack for one results-only record ---------- */
+function roPack(m, fonts){
+  var d=m.data, mt=d.match, M={venue:mt.venue,short:vpDate(mt.date,true),name:mt.name}, K=vpDocKit(fonts,M), L=K.L, R=K.R, T=K.txt;
+  var sub=mt.name+"  |  Results-only record  |  ";
+  var sp=roPoints(d), mode=d.standings;
+  var podium=function(list){ K.y+=11.3; var px=[[L,280.6],[297.6,544.3],[561.3,R]], pf=[VPC.p1,VPC.p2,VPC.p3];
+    [0,1,2].forEach(function(i){ var r=list[i], x0=px[i][0], x1=px[i][1], cx=(x0+x1)/2; K.box(x0,K.y,x1-x0,53.4,pf[i]); K.stroke(i?VPC.border:VPC.gold,1.2); K.doc.rect(x0,K.y,x1-x0,53.4,"S");
+      T(["1ST","2ND","3RD"][i],cx,K.y+18.6,"BarlowCondensed-ExtraBold",17,VPC.navy,"c"); T(r?r.name:"-",cx,K.y+35.8,"Barlow-Bold",12,VPC.text,"c"); T(r?r.label:"",cx,K.y+50,"Barlow-Regular",9,VPC.muted,"c"); });
+    K.y+=53.4+24.6; };
+  var fills=function(pl){ return pl>=1&&pl<=3?[[VPC.p1,VPC.p2,VPC.p3][pl-1]]:[]; };
+  var sepRow=function(t,nc){ var c=[{t:""},{t:t,a:"l",f:"Barlow-Bold",c:VPC.navy}]; for(var i=2;i<nc;i++) c.push(null); return {cells:c,fills:[VPC.cream],h:15.5}; };
+  var cols=function(fixed,n,last){ var c=[L,79.35,277.8], w=(R-277.8-(last||0))/n; for(var i=0;i<n;i++) c.push(c[c.length-1]+w); if(last) c.push(R); return c; };
+  var discs=d.disciplines||[], st=d.stageRes;
+  /* --- page 1: overall --- */
+  var how, ovRows=[], ovOther=[];
+  if(st){ how="Overall = sum of the stage final times (time + penalties - bonuses), lowest wins";
+    var ok=st.rows.filter(function(r){return !r.status;}).sort(function(a,b){return a.total-b.total;}), lead=ok.length?ok[0].total:0;
+    ok.forEach(function(r,i){ ovRows.push({pl:i+1,name:r.name,cells:r.st.map(function(x){return x==="DNF"?"DNF":f2(x.fin);}),total:f2(r.total),gap:i?"+"+f2(r.total-lead):"-",label:"Total "+f2(r.total)+" s"}); });
+    st.rows.filter(function(r){return r.status;}).forEach(function(r){ ovOther.push({rk:/DQ/.test(r.status)?"DQ":"DNF",name:r.name,cells:r.st.map(function(x){return x==="DNF"?"DNF":x&&x.fin!=null?f2(x.fin):"-";}),total:"-",gap:r.status}); }); }
+  else { how=mode==="avg"?"Shoot points = average of the "+discs.length+" discipline scores, each out of 100 (a discipline not shot or not finished counts 0)":"Shoot points = "+discs.filter(function(x){return x.id===mode;})[0].t+" result out of 100 (winner's time / your time x 100)";
+    var all=Object.keys(sp).map(function(k){return sp[k];}).sort(function(a,b){return b.pct-a.pct||a.name.localeCompare(b.name);});
+    var pl=0; all.forEach(function(p,i){ var cells=discs.map(function(x){ var r=x.rows.filter(function(y){return nkey(y.name)===nkey(p.name);})[0]; if(!r) return "not shot"; if(r.val==null) return r.status==="DQ"?"DQ":"DNF"; return f2(r.val)+" "+x.unit+"  ("+f2(p.d[x.id])+")"; });
+      if(p.pct>0){ pl=i>0&&all[i-1].pct===p.pct?pl:i+1; ovRows.push({pl:pl,name:p.name,cells:cells,total:f2(p.pct),gap:"",label:f2(p.pct)+" points"}); }
+      else ovOther.push({rk:cells.indexOf("DQ")>=0?"DQ":"DNF",name:p.name,cells:cells,total:"0.00",gap:""}); }); }
+  K.page("CLUB SHOOT RESULTS", sub+how.split(",")[0].split(" (")[0], "Overall results");
+  var ic=[L,107.7,283.5,365.7,470.6,561.3,R];
+  K.info([["Match",mt.name,"Date",vpDate(mt.date),"Venue",mt.venue+" ("+mt.venueTag+")"],["Match Director",mt.md||"Not recorded","Disciplines",discLabel(m),"Shooters",String(m.idx.shooters)]],ic);
+  podium(ovRows);
+  K.heading(st?"OVERALL RESULTS (sum of stage final times, seconds)":"OVERALL RESULTS ("+(mode==="avg"?"shoot points out of 100":"handgun result")+")");
+  var hc=st?st.stages.map(function(s){return {t:s.t+" (s)"};}):discs.map(function(x){return {t:x.t+" "+(x.unit==="pts"?"(pts)":"(s)")+"\n(points /100)"};});
+  var c=cols(0,hc.length+(st?2:1),0);
+  var head=[{t:"Rank"},{t:"Shooter",a:"l"}].concat(hc).concat(st?[{t:"Total (s)"},{t:"Gap to 1st"}]:[{t:mode==="avg"?"Shoot points":"Points"}]);
+  var body=ovRows.map(function(r){ return {fills:fills(r.pl),cells:[{t:String(r.pl),f:"Barlow-Bold"},{t:r.name,a:"l",f:"Barlow-Bold"}].concat(r.cells.map(function(t){return {t:t};})).concat([{t:r.total,f:"Barlow-Bold"}]).concat(st?[{t:r.gap}]:[])}; });
+  if(ovOther.length){ body.push(sepRow(st?"Not ranked overall (DNF / DQ)":"Not ranked (DNF or DQ in every discipline)",head.length));
+    ovOther.forEach(function(r){ body.push({cells:[{t:r.rk},{t:r.name,a:"l"}].concat(r.cells.map(function(t){return {t:t,c:t==="DNF"||t==="DQ"?VPC.red:VPC.text};})).concat([{t:r.total}]).concat(st?[{t:r.gap,c:VPC.red}]:[])}); }); }
+  K.table(c,head,body,hc.some(function(h){return /\n/.test(h.t);})?24.8:13.3,14.3);
+  K.y+=12.1;
+  var fn=[how+"."];
+  if(!st){ discs.forEach(function(x){ fn.push(x.t+": "+(x.high?"highest score wins; points = your score / winner's score x 100.":"lowest time wins; points = winner's time / your time x 100.")); }); }
+  var dnfN=ovOther.map(function(r){return r.name;}); if(st&&dnfN.length) fn.push("Not ranked overall: "+ovOther.map(function(r){return r.name+" ("+r.gap+")";}).join(", ")+".");
+  if(d.unranked&&d.unranked.length) fn.push("Not ranked: "+d.unranked.map(function(u){return u.name+", "+u.disc+" "+u.val+" ("+u.detail+")";}).join("; ")+". These entries are shown for the record and are not counted in any ranking.");
+  if(mt.note) fn.push("Match note: "+mt.note);
+  K.para(fn.join(" "),"Barlow-Regular",7.6,VPC.foot,9.6);
+  /* --- per-discipline pages --- */
+  discs.forEach(function(x){ var P=places(x), hasSt=!!x.stages, hasB=x.rows.some(function(r){return (r.st||[]).some(function(s){return s&&s.b;});}), hasCls=x.rows.some(function(r){return r.cls;});
+    K.page(x.t.toUpperCase()+" RESULTS", sub+x.col+"  |  "+(x.high?"highest wins":"lowest wins"), x.t+" results"); K.y+=4;
+    var hh=[{t:"Rank"},{t:"Shooter",a:"l"}].concat(hasCls?[{t:"Class"}]:[]).concat(hasSt?x.stages.map(function(s){return {t:s+" final (s)"};}):[]).concat([{t:x.unit==="pts"?"Score (pts)":"Total (s)"},{t:x.high?"Behind 1st":"Gap to 1st"},{t:"Points /100"}]);
+    var cc=cols(0,hh.length-2,0), lead=P.ranked.length?P.ranked[0].val:0;
+    var b=P.ranked.map(function(r){ return {fills:fills(r._pl),cells:[{t:String(r._pl),f:"Barlow-Bold"},{t:r.name,a:"l",f:"Barlow-Bold"}].concat(hasCls?[{t:r.cls||"-"}]:[]).concat(hasSt?r.st.map(function(s){return {t:s==null?"DQ":s==="DNF"?"DNF":f2(s.fin)};}):[]).concat([{t:f2(r.val),f:"Barlow-Bold"},{t:r.val===lead?"-":(x.high?"-":"+")+f2(Math.abs(r.val-lead))},{t:f2(x.high?r.val/lead*100:lead/r.val*100)}])}; });
+    if(P.dnf.length){ b.push(sepRow("Did not finish / DQ (not ranked, 0 points)",hh.length)); P.dnf.forEach(function(r){ b.push({cells:[{t:r.status==="DQ"?"DQ":"DNF",c:VPC.red},{t:r.name,a:"l"}].concat(hasCls?[{t:r.cls||"-"}]:[]).concat(hasSt?r.st.map(function(s){return {t:s==null?"DQ":s==="DNF"?"DNF":f2(s.fin),c:VPC.red};}):[]).concat([{t:"-"},{t:r.status||"DNF",c:VPC.red},{t:"0.00"}])}); }); }
+    K.table(cc,hh,b,24.8,14.3); K.y+=12.1;
+    K.para(x.t+" ranking: "+P.ranked.length+" ranked"+(P.dnf.length?", "+P.dnf.length+" did not finish or DQ":"")+". "+(hasSt?"Stage final = raw time + penalty"+(hasB?" - bonus":"")+"; stage detail follows.":"Only the final "+(x.unit==="pts"?"score":"time")+" per shooter was recorded on the original sheet; per-stage results and hit counts were not recorded."),"Barlow-Regular",7.6,VPC.foot,9.6);
+    if(hasSt) x.stages.forEach(function(lab,k){ stagePage(x.t+" - "+lab, x.rows.map(function(r){return {name:r.name,s:r.st[k]};}), hasB); });
+  });
+  if(st) st.stages.forEach(function(s,k){ stagePage(s.t, st.rows.map(function(r){return {name:r.name,s:r.st[k],dq:/DQ/.test(r.status)};}), true); });
+  function stagePage(title, list, hasB){
+    K.page(title.toUpperCase(), sub+"Stage results  |  lowest final wins", title); K.y+=4;
+    var ok=list.filter(function(x){return x.s&&x.s!=="DNF";}).sort(function(a,b){return a.s.fin-b.s.fin;}), no=list.filter(function(x){return !x.s||x.s==="DNF";});
+    var hasRk=ok.some(function(x){return x.s.rank;});
+    var hh=[{t:"Rank"},{t:"Shooter",a:"l"},{t:"HZ"},{t:"PZI"},{t:"PZII"},{t:"Misses"},{t:"Raw time (s)"},{t:"Penalty (s)"}].concat(hasB?[{t:"Bonus (s)"}]:[]).concat([{t:"Stage final (s)"}]).concat(hasRk?[{t:"Rank as\nprinted"}]:[]);
+    var cc=cols(0,hh.length-2,0); var pl=0;
+    var b=ok.map(function(x,i){ pl=i>0&&ok[i-1].s.fin===x.s.fin?pl:i+1; var s=x.s; return {fills:fills(pl),cells:[{t:String(pl),f:"Barlow-Bold"},{t:x.name,a:"l",f:"Barlow-Bold"},{t:"n/r",c:VPC.muted},{t:"n/r",c:VPC.muted},{t:"n/r",c:VPC.muted},{t:"n/r",c:VPC.muted},{t:f2(s.raw)},{t:s.pNone?"-":f2(s.p)}].concat(hasB?[{t:s.bNone||!s.b&&s.b!==0?"-":f2(s.b)}]:[]).concat([{t:f2(s.fin),f:"Barlow-Bold"}]).concat(hasRk?[{t:s.rank?String(s.rank):"-"}]:[])}; });
+    if(no.length){ b.push(sepRow("Did not finish this stage (DNF / DQ)",hh.length)); no.forEach(function(x){ var c=[{t:x.s==null?"DQ":"DNF",c:VPC.red},{t:x.name,a:"l"}]; for(var i=2;i<hh.length;i++) c.push({t:"-"}); b.push({cells:c}); }); }
+    K.table(cc,hh,b,24.8,14.3); K.y+=12.1;
+    K.para("Hit counts (HZ, PZI, PZII, misses) were not recorded on the original results (n/r). Stage final = raw time + penalty"+(hasB?" - bonus":"")+"; every final was checked against its parts."+(hasRk?" 'Rank as printed' is the stage rank on the original export.":"")+" A blank penalty or bonus on the original is shown as '-' and counted as 0.","Barlow-Regular",7.6,VPC.foot,9.6); }
+  /* --- source page --- */
+  K.page("SOURCE AND SCORE CHECK", sub+"Where these results come from", "Source and score check"); K.y+=13;
+  K.heading("SOURCE"); K.y+=9; K.para(d.source.title+(d.source.by?" (results compiled by "+d.source.by+")":"")+".","Barlow-Regular",8.6,VPC.text,12.3);
+  if(d.source.note){ K.y+=4; K.para(d.source.note,"Barlow-Regular",8.6,VPC.text,12.3); }
+  K.y+=10; K.heading("SCORE CHECK"); K.y+=9;
+  var chk=[], bad=0, n=0; var test=function(s){ if(!s||s==="DNF") return; n++; if(Math.abs(s.raw+s.p-(s.b||0)-s.fin)>0.005) bad++; };
+  discs.forEach(function(x){ x.rows.forEach(function(r){ (r.st||[]).forEach(test); if(r.st&&r.val!=null){ n++; if(Math.abs(r.st.reduce(function(a,s){return a+s.fin;},0)-r.val)>0.006) bad++; } }); });
+  if(st) st.rows.forEach(function(r){ r.st.forEach(test); });
+  chk.push(n?("Arithmetic: "+(n-bad)+" of "+n+" stage finals and totals add up (raw time + penalty"+(st||discs.some(function(x){return x.rows.some(function(r){return (r.st||[]).some(function(s){return s&&s.b;});});})?" - bonus":"")+")."):"Arithmetic: only final results were recorded on the original sheet, so stage arithmetic cannot be checked.");
+  chk.push("Rankings are worked out from the recorded results, lowest time (or highest score) first; DNF = did not finish, not ranked and 0 points.");
+  chk.push("Not recorded on the original results and therefore not shown: hit counts per target (n/r)"+(st||discs.some(function(x){return x.stages;})?"":", per-stage times")+", stage descriptions and round counts.");
+  chk.forEach(function(t){ K.para("\u2022  "+t,"Barlow-Regular",8.6,VPC.text,12.3); });
+  return K.finish(FOOT_SRC(m.id), mt.name+" - Results", mt.name+" - Results, "+vpDate(mt.date,true).slice(4));
+}
+
+/* ---------- season standings ---------- */
+function seasonPdf(ms, rows, fonts, gen, o){ o=o||{}; var Y=o.year||String(ms[0]&&ms[0].idx.date||"").slice(0,4), MN=["January","February","March","April","May","June","July","August","September","October","November","December"], mo=ms.map(function(m){return +String(m.idx.date).slice(5,7);}).filter(function(x){return x>0;}), span=mo.length?MN[Math.min.apply(null,mo)-1]+(mo.length>1?" - "+MN[Math.max.apply(null,mo)-1]:""):"";
+  var M={venue:"Somerset West Pistol Club",short:"Season "+Y,name:Y+" season"}, K=vpDocKit(fonts,M), L=K.L, R=K.R;
+  K.page(Y+" SEASON STANDINGS","Spectre Tactical Shooting - Club Shoot  |  "+ms.length+" club shoots  |  "+rows.length+" shooters","Season standings");
+  K.info([["Season",Y+(span?" ("+span+")":""),"Club shoots",String(ms.length),"Venue","Somerset West Pistol Club (SWPC)"],["Generated",gen,"Counting",o.counting||"All shoots count","Shooters",String(rows.length)]],[L,107.7,283.5,365.7,470.6,561.3,R]);
+  K.y+=18; K.heading("STANDINGS"); 
+  var c=[L,79.35,277.8,377.8,477.8,577.8,R];
+  var b=rows.map(function(r){ return {fills:r.place<=3?[[VPC.p1,VPC.p2,VPC.p3][r.place-1]]:[],cells:[{t:String(r.place),f:"Barlow-Bold"},{t:r.name,a:"l",f:"Barlow-Bold"},{t:f2(r.total),f:"Barlow-Bold"},{t:r.shoots+"/"+ms.length},{t:r.shoots?(r.total/r.shoots).toFixed(1):"-"},{t:f2(r.high)}]}; });
+  K.table(c,[{t:"Rank"},{t:"Shooter",a:"l"},{t:"Season points"},{t:"Shoots attended"},{t:"Average per shoot"},{t:"Best shoot"}],b,15.4,14.3);
+  K.page(Y+" CLUB SHOOTS","Spectre Tactical Shooting - Club Shoot  |  Shoots counted in the "+Y+" season","Club shoots held");
+  var c2=[L,140,430,560,660,R];
+  K.table(c2,[{t:"Date",a:"l"},{t:"Disciplines",a:"l"},{t:"Match Director",a:"l"},{t:"Shooters"},{t:"Record",a:"l"}],ms.map(function(m){ return {cells:[{t:vpDate(m.idx.date,true),a:"l",f:"Barlow-Bold"},{t:discLabel(m),a:"l"},{t:mdOf(m)||"Not recorded",a:"l",c:mdOf(m)?VPC.text:VPC.muted},{t:String(m.idx.shooters)},{t:m.id,a:"l"}]}; }),15.4,16);
+  K.y+=18; K.heading("HOW POINTS ARE CALCULATED"); K.y+=9;
+  ["Each club shoot gives points out of 100. On time-plus-penalties matches (lowest total wins, Spectre rules) the winner scores 100 and everyone else scores winner's total / your total x 100. On points-scored disciplines it is your score / winner's score x 100.",
+   "Shoots with two separate discipline lists (handgun and long gun, results-only records): each discipline is scored out of 100 and the shoot points are the average of the two; a discipline not shot or not finished counts 0. On two-discipline shoots, your points are the average of your two discipline scores, each out of 100, so a shooter only scores 100 for the shoot by winning both disciplines."+(Y==="2026"?" The September shoot counts its handgun result only.":""),
+   Y!=="2026"?"Full score-sheet shoots are scored on the overall (all stages) result. A shooter not ranked at a shoot (DNF or DQ) scores 0 for it but still counts as attended.":"February, April and May were recorded as one combined stage list and are split as the match director confirmed: Stages 1-2 handgun, Stage 3 rifle (February, April) or shotgun (May). The October shoot is scored on its overall result. A shooter not ranked at a shoot (DNF or DQ) scores 0 for it but still counts as attended.",
+   "Season points = the sum of all shoots attended. Shoots attended = shoots where the shooter appears in the results of at least one discipline (x of "+ms.length+" held). Ties: more shoots, then the best single shoot."+(o.counting&&o.counting!=="All shoots count"?" Counting: "+o.counting+" (only those shoots are added).":"")].forEach(function(t){ K.para("\u2022  "+t,"Barlow-Regular",8.6,VPC.text,12.3); });
+  return K.finish("Compiled from the original club score sheets and the published Spectre score sheet archive  |  Generated "+gen,Y+" season standings","Spectre Tactical Shooting - "+Y+" season standings");
+}
+
+/* ---------- participation summary: one page per shooter ---------- */
+function placing(m, key){ var d=m.data, out=[];
+  if(d.kind!=="results"){ var s=d.sheets.filter(function(x){return nkey(x.sh.name)===key;})[0]; if(!s) return null; var p=/^\d+$/.test(String(s.ov.place));
+    return [{disc:"Overall (all stages)",res:p?String(s.ov.total):"-",pl:p?ordn(+s.ov.place)+" of "+s.ov.of:String(s.ov.place||"Not ranked")}]; }
+  if(d.stageRes){ var rr=d.stageRes.rows, r=rr.filter(function(x){return nkey(x.name)===key;})[0]; if(!r) return null; var ok=rr.filter(function(x){return !x.status;}).sort(function(a,b){return a.total-b.total;});
+    return [{disc:"Overall (combined)",res:r.status?"-":f2(r.total)+" s",pl:r.status?r.status:ordn(ok.indexOf(r)+1)+" of "+ok.length}]; }
+  d.disciplines.forEach(function(x){ var r=x.rows.filter(function(y){return nkey(y.name)===key;})[0]; if(!r) return; var P=places(x);
+    out.push({disc:x.t,res:r.val==null?"-":f2(r.val)+" "+x.unit,pl:r.val==null?(r.status||"DNF"):ordn(r._pl)+" of "+P.ranked.length}); });
+  (d.unranked||[]).forEach(function(u){ if(nkey(u.name)===key) out.push({disc:u.disc+" (not ranked)",res:u.val,pl:"Not ranked"}); });
+  return out.length?out:null; }
+function partPdf(ms, rows, fonts, gen){
+  var M={venue:"Somerset West Pistol Club",short:"Season 2026",name:"2026 season"}, K=vpDocKit(fonts,M), L=K.L, R=K.R;
+  rows.forEach(function(r){
+    K.page("PARTICIPATION SUMMARY  |  "+r.name.toUpperCase(),"Spectre Tactical Shooting - Club Shoot  |  2026 season  |  Official club shoots at Somerset West Pistol Club",r.name);
+    K.info([["Shooter",r.name,"Season","2026","Club shoots","Attended "+r.shoots+" of "+ms.length],["Club","Spectre Tactical Shooting","Venue","Somerset West Pistol Club","Season rank",ordn(r.place)+" of "+rows.length+" ("+f2(r.total)+" pts)"]],[L,107.7,283.5,365.7,470.6,561.3,R]);
+    K.y+=18; K.heading("SHOOTS ATTENDED"); 
+    var c=[L,130,300,440,540,650,R], b=[];
+    ms.forEach(function(m){ var pp=placing(m,r.key); if(!pp) return; pp.forEach(function(p,i){ b.push({cells:[{t:i?"":vpDate(m.idx.date,true),a:"l",f:"Barlow-Bold"},{t:i?"":discLabel(m),a:"l"},{t:p.disc,a:"l"},{t:p.res},{t:p.pl,f:"Barlow-Bold",c:/DNF|DQ|Not ranked/.test(p.pl)?VPC.red:VPC.text},{t:i?"":m.id,a:"l",c:VPC.muted}]}); }); });
+    K.table(c,[{t:"Date",a:"l"},{t:"Disciplines shot at the shoot",a:"l"},{t:"Discipline / result",a:"l"},{t:"Result"},{t:"Placing"},{t:"Record",a:"l"}],b,15.4,15.2);
+    K.y+=14; K.para("This summary lists the Spectre Tactical Shooting club shoots (practical sport-shooting matches under the Spectre rules) in which the shooter took part during 2026, compiled from the original club score sheets and the published score sheet archive. Each record can be checked on the online archive by its record id. Generated "+gen+".","Barlow-Regular",8.0,VPC.foot,10.4);
+  });
+  return K.finish("Compiled from the original club score sheets and the published Spectre score sheet archive  |  Generated "+gen,"2026 participation summary","Spectre Tactical Shooting - 2026 participation summary");
+}
+
+window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:standings};
+})();
+
+</script>
+<script>
 (function(){
   var RULES_HTML = document.getElementById("rulesTpl").innerHTML;
   var F = null, db = null, CUR = null, app = document.getElementById("app"), e = shEsc;
@@ -814,13 +978,14 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
   }
   function showRO(m){
     var src = m.source || {};
-    app.innerHTML = head(m) + '<div class="card"><span class="robadge">Results only · no score sheets available</span><p class="small muted" style="margin:8px 0 0">' + (m.stageRes || (m.disciplines || []).some(function(d){ return d.stages; }) ? 'This shoot was scored before the archive existed. The stage times, penalties and bonuses survive, but not the hit counts, so there are no full score sheets.' : 'This shoot was scored on paper before the scoring app. Only the final results survive, so there are no stage details or individual score sheets.') + '</p></div>' +
+    app.innerHTML = head(m) + '<div class="card noprint"><button type="button" class="packbtn" id="roPackPdf">&#11015; Download results pack (PDF)<small>Overall, each discipline, every stage and the source check &middot; A4 landscape, colour</small></button></div>' + '<div class="card"><span class="robadge">Results only · no score sheets available</span><p class="small muted" style="margin:8px 0 0">' + (m.stageRes || (m.disciplines || []).some(function(d){ return d.stages; }) ? 'This shoot was scored before the archive existed. The stage times, penalties and bonuses survive, but not the hit counts, so there are no full score sheets.' : 'This shoot was scored on paper before the scoring app. Only the final results survive, so there are no stage details or individual score sheets.') + '</p></div>' +
       (m.stageRes ? roStageHTML(m) : "") + (m.disciplines || []).map(function(d){ var rs = roPlaces(d);
         return '<div class="card"><h3 style="margin:0 0 2px">' + e(d.t) + '</h3><div class="small muted">' + e(d.col) + ' · ' + (d.high ? 'highest wins' : 'lowest wins') + ' · ' + rs.length + ' shooters</div><div class="scroll"><table class="restable"><tr><th>#</th><th>Shooter</th><th style="text-align:right">' + e(d.short || d.col) + '</th><th>Class</th></tr>' +
           rs.map(function(r){ var nm = d.stages ? '<a href="#m=' + encodeURIComponent(m.id) + '&s=' + roShooters(m).map(nkey).indexOf(nkey(r.name)) + '">' + e(r.name) + '</a>' : e(r.name);
             return '<tr><td>' + (r.tie ? "=" : "") + r.place + '</td><td style="white-space:normal">' + nm + '</td><td style="text-align:right">' + (r.val == null ? e(r.status || "DNF") : e(r.val)) + '</td><td>' + e(r.cls) + '</td></tr>'; }).join("") + '</table></div>' + (d.stages ? roDiscStages(m, d) : '') + '</div>'; }).join("") +
       ((m.unranked || []).length ? '<div class="card"><h3 style="margin:0 0 4px">Not ranked</h3><p class="small muted" style="margin:0 0 6px">Shown for the record only; not in the rankings or the year standings.</p><ul style="margin:0;padding-left:18px">' + m.unranked.map(function(u){ return '<li>' + e(u.name) + ' · ' + e(u.disc) + ': <b>' + e(u.val) + '</b> <span class="small muted">(' + e(u.detail) + ')</span></li>'; }).join("") + '</ul></div>' : '') +
       '<div class="card rosrc"><b>Source:</b> ' + e(src.title || "") + (src.by ? ', made by ' + e(src.by) : "") + '. ' + e(src.note || "") + '</div>';
+    roPackWire(m);
   }
   function showMatch(id, q){
     app.innerHTML = '<div class="card">Loading…</div>';
@@ -877,6 +1042,18 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
         window.__lastPdf = { name: name, pages: pdf.getNumberOfPages(), title: vpTitle(m) }; pdf.save(name); })
     .catch(function(er){ alert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.innerHTML = old; } });
   }
+  /* results-only (kind:"results") records: separate standalone generator ro-pack.js; full records keep pdfPack/vpPack above */
+  function roRec(m){ return getList().then(function(list){ var x = list.filter(function(y){ return y.id === m.id; })[0] || {}; return { id: m.id, idx: { date: x.date || (m.match && m.match.date), shooters: x.shooters }, data: m }; }); }
+  function roPackWire(m){ var b = document.getElementById("roPackPdf"); if(!b || !isRO(m) || !window.ROPACK) { if(b) b.parentNode.style.display = "none"; return; }
+    b.onclick = function(){ var old = b.innerHTML; b.disabled = true; b.textContent = "Making results pack\u2026"; var name = slug(m.match.name) + "-" + (m.match.date || "") + "-results-pack.pdf";
+      Promise.all([pdfLib().then(function(){ return vpLoadFonts("fonts/"); }), roRec(m)]).then(function(r){ var pdf = ROPACK.roPack(r[1], r[0]); window.__lastPdf = { name: name, pages: pdf.getNumberOfPages(), kind: "results" }; pdf.save(name); })
+      .catch(function(er){ alert(er.message || er); }).then(function(){ b.disabled = false; b.innerHTML = old; }); }; }
+  function genDate(){ var d = new Date(); return d.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][d.getMonth()] + " " + d.getFullYear(); }
+  function standPdf(ms, ds, rows, bestN, btn){ var old = btn.textContent; btn.disabled = true; btn.textContent = "Making PDF\u2026"; var name = "spectre-" + YEAR + "-season-standings.pdf";
+    var recs = ms.map(function(x, i){ return { id: x.id, idx: { date: x.date, shooters: x.shooters }, data: ds[i] }; }).filter(function(r){ return r.data; });
+    var pr = rows.map(function(r){ var v = Object.keys(r.per).map(function(k){ return r.per[k].pct || 0; }); return { place: r.place, name: r.name, total: r.total, shoots: r.shoots, high: v.length ? Math.max.apply(null, v) : 0 }; });
+    pdfLib().then(function(){ return vpLoadFonts("fonts/"); }).then(function(f){ var pdf = ROPACK.seasonPdf(recs, pr, f, genDate(), { year: YEAR, counting: bestN ? "Best " + bestN + " of 12" : "All shoots count" }); window.__lastPdf = { name: name, pages: pdf.getNumberOfPages() }; pdf.save(name); })
+    .catch(function(er){ alert(er.message || er); }).then(function(){ btn.disabled = false; btn.textContent = old; }); }
   window.SSA = { pdfSheets: pdfSheets, pdfResults: pdfResults, pdfPack: pdfPack, get cur(){ return CUR; } };
   /* ---------- router ---------- */
   /* ---------- season standings (one year's published club shoots) ----------
@@ -941,14 +1118,16 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
         var mo = function(m){ var x = /^\d{4}-(\d{2})-(\d{2})/.exec(String(m.date || "")); return x ? MON[+x[1] - 1] + " " + (+x[2]) : e(m.date); };
         var h = '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(YEAR) + ' season standings</h2><div class="small muted">' + ms.length + ' club shoot' + (ms.length === 1 ? "" : "s") + ' published · ' + rows.length + ' shooters</div></div><a class="btn noprint" href="#y=' + encodeURIComponent(YEAR) + '">All ' + e(YEAR) + ' shoots</a></div>' +
           '<label class="noprint" for="bestN"><b>Counting</b></label><select id="bestN" class="noprint">' + opts + '</select>' +
-          '<div class="how"><b>How points work.</b> Each club shoot gives match points out of 100 from the overall (all stages) result, all competitors together: on time-plus-penalties matches (lowest total wins, Spectre rules) the winner scores 100 and everyone else scores <i>winner’s total ÷ your total × 100</i>; on points matches it is <i>your total ÷ winner’s total × 100</i>. A shooter not ranked at a shoot (DNF, DQ or a missing stage) gets 0 for it. The season score is the sum of ' + (bestN ? 'each shooter’s best ' + bestN + ' shoots (struck-through scores are dropped)' : 'all their shoots') + '. Ties: more shoots, then the best single shoot.' + (ds.some(function(d){ return isRO(d) && !d.stageRes; }) ? ' <br><sup>R</sup> <b>Results-only shoots</b> (old paper results with separate handgun and long gun lists, no combined total): ' + roHow(ds.filter(function(d){ return isRO(d) && !d.stageRes; })[0]) : '') + (ds.some(function(d){ return isRO(d) && d.stageRes; }) ? ' <br><sup>R</sup> Shoots with stage results only are scored like any other time match, from the final time.' : '') + '</div></div>';
+          '<div class="how"><b>How points work.</b> Each club shoot gives match points out of 100 from the overall (all stages) result, all competitors together: on time-plus-penalties matches (lowest total wins, Spectre rules) the winner scores 100 and everyone else scores <i>winner’s total ÷ your total × 100</i>; on points matches it is <i>your total ÷ winner’s total × 100</i>. A shooter not ranked at a shoot (DNF, DQ or a missing stage) gets 0 for it. The season score is the sum of ' + (bestN ? 'each shooter’s best ' + bestN + ' shoots (struck-through scores are dropped)' : 'all their shoots') + '. Ties: more shoots, then the best single shoot.' + (ds.some(function(d){ return isRO(d) && !d.stageRes; }) ? ' <br><sup>R</sup> <b>Results-only shoots</b> (old paper results with separate handgun and long gun lists, no combined total): ' + roHow(ds.filter(function(d){ return isRO(d) && !d.stageRes; })[0]) + (ds.some(function(d){ return isRO(d) && (d.disciplines || []).length > 1; }) ? ' On two-discipline shoots, your points are the average of your two discipline scores, each out of 100, so a shooter only scores 100 for the shoot by winning both disciplines.' : '') : '') + (ds.some(function(d){ return isRO(d) && d.stageRes; }) ? ' <br><sup>R</sup> Shoots with stage results only are scored like any other time match, from the final time.' : '') + '</div></div>';
         if(!ms.length) h += '<div class="card muted">No club shoots published for ' + e(YEAR) + ' yet.</div>';
         else h += '<div class="card"><div class="scroll"><table class="restable stand"><tr><th>#</th><th>Shooter</th><th class="p">Season</th><th class="p">Shoots</th><th class="p">Avg %</th>' + ms.map(function(m){ return '<th class="p"><a href="#m=' + encodeURIComponent(m.id) + '">' + mo(m) + '</a></th>'; }).join("") + '</tr>' +
           rows.map(function(r){ var cells = ms.map(function(m){ var x = r.per[m.id]; if(!x) return '<td class="p muted">–</td>';
               var drop = !!r.dropIds[m.id];
               return '<td class="p' + (drop ? " drop" : "") + '" title="' + e(x.why || "") + '">' + (x.ro && x.pct ? x.pct.toFixed(2) + '<sup>R</sup>' : x.pct ? x.pct.toFixed(2) : (x.why ? '0 <span class="small">(' + e(x.why) + ')</span>' : "0")) + '</td>'; }).join("");
             return '<tr' + (r.place <= 3 ? ' class="top3"' : "") + '><td>' + r.place + '</td><td><b>' + e(r.name) + '</b></td><td class="p pts">' + r.total.toFixed(2) + '</td><td class="p" title="Shoots attended of ' + ms.length + ' held">' + r.shoots + '/' + ms.length + '</td><td class="p">' + r.avg.toFixed(1) + '</td>' + cells + '</tr>'; }).join("") + '</table></div></div>';
+        if(ms.length && window.ROPACK) h += '<div class="card noprint"><button type="button" class="packbtn" id="stPdf">&#128424; Print season standings (PDF)<small>Standings, the club shoots held and how points work &middot; A4 landscape</small></button></div>';
         app.innerHTML = h;
+        var sp = document.getElementById("stPdf"); if(sp) sp.onclick = function(){ standPdf(ms, ds, rows, bestN, sp); };
         document.getElementById("bestN").onchange = function(){ go("y=" + encodeURIComponent(YEAR) + "&st=1" + (+this.value ? "&b=" + this.value : "")); };
       });
     }).catch(fail);
