@@ -35,6 +35,8 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 .paper{background:#fff;width:210mm;max-width:100%;padding:10mm;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.15);overflow-x:auto}
 #pdfStage{position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:38px}
 .err{color:#a00}
+.robadge{display:inline-block;margin-top:6px;padding:4px 10px;border-radius:14px;background:#fff3cd;border:1px solid #e0c060;color:#5a4500;font-weight:700;font-size:.85em}
+.rosrc{font-size:.85em;color:var(--muted);line-height:1.4}
 /* results pack (same look as the app pack) */
 #packStage{position:fixed;left:-20000px;top:0;width:1123px;background:#fff}
 #packStage .pkpage{width:1123px;height:794px;padding:34px 38px 44px;position:relative;box-sizing:border-box;font-family:"Barlow","Roboto",Arial,sans-serif;font-size:8.6pt;color:#111;background:#fff;overflow:hidden}
@@ -731,7 +733,7 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
         '<ul class="hits" id="hits"></ul></div>' +
         '<div class="card" id="yrCard"><h3 style="margin:0 0 4px">' + e(YEAR) + ' <span class="small muted">· ' + rows.length + ' club shoot' + (rows.length === 1 ? "" : "s") + '</span></h3>' + (rows.length ? '<a class="stbtn" id="stLink" href="#y=' + encodeURIComponent(YEAR) + '&st=1">&#127942; ' + e(YEAR) + ' season standings</a>' : "") + (rows.length ? '<ul class="matches" id="mList">' + rows.map(function(m){
           var mo = /^\d{4}-(\d{2})-(\d{2})/.exec(String(m.date || ""));
-          return '<li><div class="mon">' + (mo ? MON[+mo[1] - 1] + '<span>' + (+mo[2]) + '</span>' : "–") + '</div><div class="grow"><b>' + e(m.matchName) + '</b><br><span class="small muted">' + e(m.date) + (m.venue ? ' · ' + e(m.venue) : "") + ' · ' + e(m.shooters) + ' shooters · ' + e(m.stages) + ' stages</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '" data-m="' + e(m.id) + '">Open</a></li>'; }).join("") + '</ul>' : '<p class="muted">No club shoots published for ' + e(YEAR) + ' yet.</p>') + '</div>';
+          return '<li><div class="mon">' + (mo ? MON[+mo[1] - 1] + '<span>' + (+mo[2]) + '</span>' : "–") + '</div><div class="grow"><b>' + e(m.matchName) + '</b><br><span class="small muted">' + e(m.date) + (m.venue ? ' · ' + e(m.venue) : "") + ' · ' + e(m.shooters) + ' shooters · ' + (+m.stages === 0 ? 'results only' : e(m.stages) + ' stages') + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '" data-m="' + e(m.id) + '">Open</a></li>'; }).join("") + '</ul>' : '<p class="muted">No club shoots published for ' + e(YEAR) + ' yet.</p>') + '</div>';
       var inp = document.getElementById("lq"), tok = 0;
       var run = function(){ var t = inp.value.trim().toLowerCase(), my = ++tok, hits = document.getElementById("hits"), card = document.getElementById("yrCard");
         if(t.length < 2){ hits.innerHTML = ""; card.style.display = ""; return; }
@@ -742,6 +744,8 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
           var out = [];
           scope.forEach(function(m, i){ var mm = (m.matchName + " " + m.date + " " + (m.venue || "")).toLowerCase().indexOf(t) >= 0;
             if(mm) out.push('<li><div class="grow"><b>' + e(m.matchName) + '</b> <span class="small muted">' + e(m.date) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '">Open</a></li>');
+            roRows(ds[i]).forEach(function(r){ if(r.name.toLowerCase().indexOf(t) < 0 && String(r.src || '').toLowerCase().indexOf(t) < 0) return;
+              out.push('<li><div class="grow"><b>' + e(r.name) + '</b><br><span class="small muted">' + e(m.matchName) + ' · ' + e(m.date) + ' · ' + e(r.disc) + ' place ' + e(r.place) + ', ' + e(r.val) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '">Results</a></li>'); });
             ((ds[i] && ds[i].sheets) || []).forEach(function(s){ if((s.sh.name + " " + s.sh.no).toLowerCase().indexOf(t) < 0) return;
               out.push('<li><div class="grow"><b>' + e(s.sh.name) + '</b><br><span class="small muted">' + e(m.matchName) + ' · ' + e(m.date) + ' · ' + (s.ov && /^\d+$/.test(String(s.ov.place)) ? 'place ' + e(s.ov.place) + ', total ' + e(s.ov.total) : e(s.ov ? s.ov.place : "")) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '&s=' + encodeURIComponent(s.sh.id) + '">View sheet</a></li>'); }); });
           hits.innerHTML = out.length ? out.join("") : '<li class="muted">Nothing matches “' + e(t) + '” in ' + (ALLY ? "any year" : e(YEAR)) + '.' + (ALLY ? "" : ' Try “All years”.') + '</li>'; }); };
@@ -762,9 +766,66 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
   function sheetObj(m, s){ var d = JSON.parse(JSON.stringify(s)); d.match = m.match; d.neg = m.neg; d.method = m.method; d.ver = m.ver; return d; }
   function head(m){ return '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(m.match.name) + '</h2><div class="small muted">' + e(m.match.date) + (m.match.venue ? ' · ' + e(m.match.venue) : "") + (m.match.md ? ' · Match Director: ' + e(m.match.md) : "") + ' · published ' + e(String(m.publishedAt || "").slice(0, 16).replace("T", " ")) + ' UTC</div>' + (m.match.note ? '<div class="mnote"><b>Match note:</b> ' + e(m.match.note) + '</div>' : "") + '</div><a class="btn noprint" href="#y=' + encodeURIComponent(String(m.match.date || "").slice(0, 4) || YEAR || "") + '">All ' + e(String(m.match.date || "").slice(0, 4)) + ' shoots</a></div></div>'; }
   function notesHTML(m){ var n = m.notes || []; return n.length ? '<h3>Notes</h3><ol class="anotes">' + n.map(function(x){ return '<li>Stage ' + e(x.stage) + ' · ' + e(x.shooter) + ': ' + e(x.text) + '</li>'; }).join("") + '</ol>' : ""; }
+  /* ---------- results-only records (old shoots with final results but no score sheets) ----------
+     data/main = { v, kind:"results", match, source:{ title, by, note }, standings:"avg", sheets:[], tables:[],
+       disciplines:[{ id, t, unit, high (true = highest wins), col, rows:[{ name, src, val, cls }] }] } */
+  function isRO(m){ return m && m.kind === "results"; }
+  function roPlaces(d){ var rs = d.rows.filter(function(r){ return r.val != null; }).sort(function(a, b){ return d.high ? b.val - a.val : a.val - b.val; });
+    rs.forEach(function(r, i){ r.place = i > 0 && r.val === rs[i - 1].val ? rs[i - 1].place : i + 1; });
+    rs.forEach(function(r){ r.tie = rs.filter(function(x){ return x.place === r.place; }).length > 1; });
+    return rs.concat(d.rows.filter(function(r){ return r.val == null; }).map(function(r){ r.place = "DNF"; r.tie = false; return r; })); }
+  function roHasB(d){ return d.rows.some(function(r){ return (r.st || []).some(function(x){ return x && x.b; }); }); }
+  function roShooters(m){ var o = [], seen = {}; (m.disciplines || []).forEach(function(d){ d.rows.forEach(function(r){ var k = nkey(r.name); if(!seen[k]){ seen[k] = 1; o.push(r.name); } }); }); return o; }
+  /* per-discipline stage detail (time + penalty = total per stage) */
+  function roDiscStages(m, d){ var rs = roPlaces(d), h = '';
+    d.stages.forEach(function(t, k){ var ok = rs.filter(function(r){ return r.st[k] && r.st[k].fin != null; }).slice().sort(function(a, b){ return a.st[k].fin - b.st[k].fin; });
+      h += '<h4 style="margin:10px 0 2px">' + e(d.t) + ' · ' + e(t) + '</h4><div class="scroll"><table class="restable"><tr><th>#</th><th>Shooter</th><th style="text-align:right">Time</th><th style="text-align:right">Pen.</th>' + (roHasB(d) ? '<th style="text-align:right">Bon.</th>' : '') + '<th style="text-align:right">Total</th></tr>' +
+        ok.map(function(r, i){ var x = r.st[k]; return '<tr><td>' + (i + 1) + '</td><td style="white-space:normal">' + e(r.name) + '</td><td style="text-align:right">' + f2(x.raw) + '</td><td style="text-align:right">' + f2(x.p) + '</td>' + (roHasB(d) ? '<td style="text-align:right">' + f2(x.b || 0) + '</td>' : '') + '<td style="text-align:right"><b>' + f2(x.fin) + '</b></td></tr>'; }).join("") +
+        rs.filter(function(r){ return !(r.st[k] && r.st[k].fin != null); }).map(function(r){ return '<tr class="muted"><td>–</td><td>' + e(r.name) + '</td><td colspan="' + (roHasB(d) ? 4 : 3) + '">DNF</td></tr>'; }).join("") + '</table></div>'; });
+    return h; }
+  function showRODiscSheet(m, i){ var nm = roShooters(m)[+i]; if(!nm) throw new Error("Shooter not found in this match.");
+    var h = '<div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(m.id) + '">Back to the results</a></div><div class="card"><h2 style="margin:0">' + e(nm) + '</h2><div class="small muted">' + e(m.match.name) + ' · ' + e(m.match.date) + ' · ' + e(m.match.venueTag || m.match.venue) + '</div><span class="robadge">Stage results only · hit counts not recorded</span>';
+    (m.disciplines || []).forEach(function(d){ var rs = roPlaces(d), r = rs.filter(function(x){ return nkey(x.name) === nkey(nm); })[0];
+      h += '<h3 style="margin:12px 0 2px">' + e(d.t) + '</h3>';
+      if(!r){ h += '<p class="muted small">Did not shoot ' + e(d.t.toLowerCase()) + '.</p>'; return; }
+      h += '<p style="margin:2px 0"><b>' + (r.val == null ? e(r.status || "DNF") : 'Place ' + r.place + ' of ' + rs.filter(function(x){ return x.val != null; }).length + ' · total ' + f2(r.val) + ' s') + '</b></p>';
+      if(d.stages) h += '<div class="scroll"><table class="restable"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th style="text-align:right">Time</th><th style="text-align:right">Pen.</th>' + (roHasB(d) ? '<th style="text-align:right">Bon.</th>' : '') + '<th style="text-align:right">Total</th></tr>' +
+        d.stages.map(function(t, k){ var x = r.st[k]; return '<tr><td>' + e(t) + '</td>' + (x && x.fin != null ? '<td class="muted">n/r</td>'.repeat(4) + '<td style="text-align:right">' + f2(x.raw) + '</td><td style="text-align:right">' + f2(x.p) + '</td>' + (roHasB(d) ? '<td style="text-align:right">' + f2(x.b || 0) + '</td>' : '') + '<td style="text-align:right"><b>' + f2(x.fin) + '</b></td>' : '<td colspan="' + (roHasB(d) ? 8 : 7) + '" class="muted">DNF</td>') + '</tr>'; }).join("") + '</table></div>'; });
+    app.innerHTML = h + '<p class="small muted">n/r = not recorded in the original results. Pen. = penalty seconds' + ((m.disciplines || []).some(roHasB) ? ', Bon. = bonus seconds (taken off)' : '') + '.</p></div>'; }
+  function roRows(m){ if(!isRO(m)) return []; var o = [];
+    if(m.stageRes) m.stageRes.rows.forEach(function(r){ o.push({ name: r.name, src: r.src, disc: 'overall', place: r.status ? r.status : r.place, val: r.total != null ? r.total.toFixed(2) + ' s' : '' }); }); (m.disciplines || []).forEach(function(d){ roPlaces(d).forEach(function(r){ o.push({ name: r.name, src: r.src, disc: d.t, place: (r.tie ? "=" : "") + r.place, val: r.val == null ? (r.status || "DNF") : r.val + " " + d.unit }); }); }); return o; }
+  function f2(x){ return x == null ? "–" : (+x).toFixed(2); }
+  /* stage-level results (e.g. a PractiScore export): raw, penalty, bonus, final and rank per stage, no hit counts */
+  function roStageHTML(m){ var R = m.stageRes, S = R.stages;
+    var h = '<div class="card"><h3 style="margin:0 0 2px">Overall</h3><div class="small muted">Final time = sum of stage finals · lowest wins · tap a name for their stage card</div><div class="scroll"><table class="restable"><tr><th>#</th><th>Shooter</th><th style="text-align:right">Final (s)</th>' + S.map(function(s){ return '<th style="text-align:right">S' + s.no + '</th>'; }).join("") + '</tr>' +
+      R.rows.map(function(r, i){ return '<tr><td>' + (r.status ? e(r.status === "DQ" ? "DQ" : "DNF") : r.place) + '</td><td><a href="#m=' + encodeURIComponent(m.id) + '&s=' + i + '">' + e(r.name) + '</a></td><td style="text-align:right"><b>' + (r.status ? e(r.status) : f2(r.total)) + '</b></td>' + r.st.map(function(x){ return '<td style="text-align:right">' + (x && x.fin != null ? f2(x.fin) : x === "DNF" ? "DNF" : "–") + '</td>'; }).join("") + '</tr>'; }).join("") + '</table></div></div>';
+    S.forEach(function(s, k){ var rs = R.rows.filter(function(r){ return r.st[k] && r.st[k].fin != null; }).sort(function(a, b){ return a.st[k].rank - b.st[k].rank; });
+      h += '<div class="card"><h3 style="margin:0 0 2px">' + e(s.t) + '</h3><div class="small muted">Final = raw + penalties − bonus · lowest wins</div><div class="scroll"><table class="restable"><tr><th>#</th><th>Shooter</th><th style="text-align:right">Raw</th><th style="text-align:right">P</th><th style="text-align:right">B</th><th style="text-align:right">Final</th></tr>' +
+        rs.map(function(r){ var x = r.st[k]; return '<tr><td>' + x.rank + '</td><td style="white-space:normal">' + e(r.name) + '</td><td style="text-align:right">' + f2(x.raw) + '</td><td style="text-align:right">' + f2(x.p) + '</td><td style="text-align:right">' + (x.bNone ? "–" : f2(x.b)) + '</td><td style="text-align:right"><b>' + f2(x.fin) + '</b></td></tr>'; }).join("") +
+        R.rows.filter(function(r){ return !(r.st[k] && r.st[k].fin != null); }).map(function(r){ return '<tr class="muted"><td>–</td><td>' + e(r.name) + '</td><td colspan="4">' + (r.status === "DQ" ? "DQ" : "DNF") + '</td></tr>'; }).join("") + '</table></div></div>'; });
+    return h; }
+  function showROSheet(m, i){ var r = m.stageRes && m.stageRes.rows[+i]; if(!r) throw new Error("Shooter not found in this match.");
+    app.innerHTML = '<div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(m.id) + '">Back to the results</a></div><div class="card"><h2 style="margin:0">' + e(r.name) + '</h2><div class="small muted">' + e(m.match.name) + ' · ' + e(m.match.date) + ' · ' + e(m.match.venueTag || m.match.venue) + '</div>' +
+      '<p><b>' + (r.status ? e(r.status) : 'Place ' + r.place + ' of ' + m.stageRes.rows.filter(function(x){ return !x.status; }).length + ' · final ' + f2(r.total) + ' s') + '</b></p><span class="robadge">Stage results only · hit counts not recorded</span>' +
+      '<div class="scroll" style="margin-top:8px"><table class="restable"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th style="text-align:right">Raw</th><th style="text-align:right">P</th><th style="text-align:right">B</th><th style="text-align:right">Final</th><th>Rank</th></tr>' +
+      m.stageRes.stages.map(function(s, k){ var x = r.st[k], nr = '<td class="muted">n/r</td>'.repeat(4);
+        return '<tr><td>' + e(s.t) + '</td>' + (x && x.fin != null ? nr + '<td style="text-align:right">' + f2(x.raw) + '</td><td style="text-align:right">' + f2(x.p) + '</td><td style="text-align:right">' + (x.bNone ? "–" : f2(x.b)) + '</td><td style="text-align:right"><b>' + f2(x.fin) + '</b></td><td>' + x.rank + '</td>' : '<td colspan="9" class="muted">' + (x === "DNF" ? "DNF" : r.status === "DQ" ? "DQ" : "–") + '</td>') + '</tr>'; }).join("") +
+      '</table></div><p class="small muted">n/r = not recorded in the original results. P = penalty seconds, B = bonus seconds.</p></div>';
+  }
+  function showRO(m){
+    var src = m.source || {};
+    app.innerHTML = head(m) + '<div class="card"><span class="robadge">Results only · no score sheets available</span><p class="small muted" style="margin:8px 0 0">' + (m.stageRes || (m.disciplines || []).some(function(d){ return d.stages; }) ? 'This shoot was scored before the archive existed. The stage times, penalties and bonuses survive, but not the hit counts, so there are no full score sheets.' : 'This shoot was scored on paper before the scoring app. Only the final results survive, so there are no stage details or individual score sheets.') + '</p></div>' +
+      (m.stageRes ? roStageHTML(m) : "") + (m.disciplines || []).map(function(d){ var rs = roPlaces(d);
+        return '<div class="card"><h3 style="margin:0 0 2px">' + e(d.t) + '</h3><div class="small muted">' + e(d.col) + ' · ' + (d.high ? 'highest wins' : 'lowest wins') + ' · ' + rs.length + ' shooters</div><div class="scroll"><table class="restable"><tr><th>#</th><th>Shooter</th><th style="text-align:right">' + e(d.short || d.col) + '</th><th>Class</th></tr>' +
+          rs.map(function(r){ var nm = d.stages ? '<a href="#m=' + encodeURIComponent(m.id) + '&s=' + roShooters(m).map(nkey).indexOf(nkey(r.name)) + '">' + e(r.name) + '</a>' : e(r.name);
+            return '<tr><td>' + (r.tie ? "=" : "") + r.place + '</td><td style="white-space:normal">' + nm + '</td><td style="text-align:right">' + (r.val == null ? e(r.status || "DNF") : e(r.val)) + '</td><td>' + e(r.cls) + '</td></tr>'; }).join("") + '</table></div>' + (d.stages ? roDiscStages(m, d) : '') + '</div>'; }).join("") +
+      ((m.unranked || []).length ? '<div class="card"><h3 style="margin:0 0 4px">Not ranked</h3><p class="small muted" style="margin:0 0 6px">Shown for the record only; not in the rankings or the year standings.</p><ul style="margin:0;padding-left:18px">' + m.unranked.map(function(u){ return '<li>' + e(u.name) + ' · ' + e(u.disc) + ': <b>' + e(u.val) + '</b> <span class="small muted">(' + e(u.detail) + ')</span></li>'; }).join("") + '</ul></div>' : '') +
+      '<div class="card rosrc"><b>Source:</b> ' + e(src.title || "") + (src.by ? ', made by ' + e(src.by) : "") + '. ' + e(src.note || "") + '</div>';
+  }
   function showMatch(id, q){
     app.innerHTML = '<div class="card">Loading…</div>';
     loadMatch(id).then(function(m){
+      if(isRO(m)){ m.id = id; return showRO(m); }
       app.innerHTML = head(m) + '<div class="card noprint"><button type="button" class="packbtn" id="packPdf">&#11015; Download results pack (PDF)<small>Overall, every stage and the score check &middot; A4 landscape, colour</small></button></div><div class="card"><label for="q"><b>Find your name</b></label><input type="search" id="q" placeholder="Type part of your name" value="' + e(q || "") + '" autocomplete="off"><ul class="shooters" id="shList"></ul></div>' +
         '<div class="card row"><a class="btn" href="#m=' + encodeURIComponent(id) + '&r=0">Full results</a><button type="button" id="allPdf">Download all score sheets (PDF)</button></div>';
       var paint = function(){ var t = document.getElementById("q").value.trim().toLowerCase();
@@ -777,7 +838,7 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
     }).catch(fail);
   }
   function showSheet(id, sid){
-    loadMatch(id).then(function(m){ var s = m.sheets.filter(function(x){ return x.sh.id === sid; })[0]; if(!s) throw new Error("Shooter not found in this match.");
+    loadMatch(id).then(function(m){ if(isRO(m)) m.id = id; if(isRO(m)) return m.stageRes ? showROSheet(m, sid) : (m.disciplines || []).some(function(d){ return d.stages; }) ? showRODiscSheet(m, sid) : showRO(m); var s = m.sheets.filter(function(x){ return x.sh.id === sid; })[0]; if(!s) throw new Error("Shooter not found in this match.");
       app.innerHTML = '<div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(id) + '">Back to ' + e(m.match.name) + '</a><button type="button" class="primary" id="onePdf">Download PDF</button><button type="button" id="prt">Print</button></div><div class="paper" id="sheetView">' + sheetRender(sheetObj(m, s), null, "published " + String(m.publishedAt || "").slice(0, 10)) + '</div>';
       document.getElementById("onePdf").onclick = function(){ pdfSheets(m, [s], this); };
       document.getElementById("prt").onclick = function(){ window.print(); };
@@ -788,7 +849,7 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
     if(t) h += '<h3>' + e(t.t) + '</h3><div class="small muted">' + e(t.s) + '</div><div class="scroll"><table class="restable"><tr>' + t.h.map(function(c){ return '<th>' + e(c) + '</th>'; }).join("") + '</tr>' + (t.r.length ? t.r.map(function(r){ return '<tr>' + r.map(function(c){ return '<td>' + e(c) + '</td>'; }).join("") + '</tr>'; }).join("") : '<tr><td colspan="' + t.h.length + '">No scores.</td></tr>') + '</table></div>';
     return h + notesHTML(m); }
   function showResults(id, i){
-    loadMatch(id).then(function(m){ i = Math.max(0, Math.min(+i || 0, (m.tables || []).length - 1));
+    loadMatch(id).then(function(m){ if(isRO(m)) return showRO(m); i = Math.max(0, Math.min(+i || 0, (m.tables || []).length - 1));
       app.innerHTML = head(m) + '<div class="card noprint"><button type="button" class="packbtn" id="packPdf">&#11015; Download results pack (PDF)<small>Overall, every stage and the score check &middot; A4 landscape, colour</small></button></div><div class="card row noprint"><a class="btn" href="#m=' + encodeURIComponent(id) + '">Score sheets</a><button type="button" class="primary" id="resPdf">Download full results (PDF)</button></div><div class="card" id="resView">' + resultsHTML(m, i) + '</div>';
       document.getElementById("resPdf").onclick = function(){ pdfResults(m, this); };
       packWire(m);
@@ -823,8 +884,33 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
      time-based (negative) matches: winner's total ÷ your total × 100; points-based (positive): your total ÷ winner's total × 100.
      Not ranked (DNF / DQ / missing stage) = 0 points but still counts as attended. Season = sum of the best N shoots (default all). */
   function num(x){ var v = parseFloat(String(x == null ? "" : x).replace(/[^\d.\-]/g, "")); return isFinite(v) ? v : null; }
-  function nkey(n){ return String(n || "").trim().toLowerCase().replace(/\s+/g, " "); }
+  /* "Harding, Bill" and "Bill Harding" are the same shooter */
+  function nkey(n){ var s = String(n || "").trim().replace(/\s+/g, " "), c = /^([^,]+),\s*(.+)$/.exec(s); if(c) s = c[2] + " " + c[1]; return s.toLowerCase(); }
+  /* Results-only shoots have separate disciplines and no combined overall. RO_MODE (or the record's own "standings" field):
+     "avg"  = each discipline scored out of 100 as usual, shoot points = the average over ALL disciplines (one not shot = 0) – default
+     "sum"  = discipline points added (out of 200 for two disciplines)
+     "best" = each shooter's better discipline
+     "hg" / "lg" etc. = one discipline only (by id) */
+  var RO_MODE = null; /* null = use the record's standings field, else force e.g. "hg" */
+  function roPoints(d){
+    if(d.stageRes){ var rr = d.stageRes.rows, ok = rr.filter(function(r){ return !r.status && r.total > 0; }), o = {}, bt = Math.min.apply(null, ok.map(function(r){ return r.total; }));
+      rr.forEach(function(r){ o[nkey(r.name)] = r.status ? { name: r.name, pct: 0, why: r.status } : { name: r.name, pct: Math.round(bt / r.total * 10000) / 100 }; }); return o; }
+    var ds = d.disciplines || [], mode = RO_MODE || d.standings || "avg", per = {}, out = {};
+    ds.forEach(function(x){ var vs = x.rows.map(function(r){ return r.val; }).filter(function(v){ return v > 0; }); if(!vs.length) return;
+      var best = x.high ? Math.max.apply(null, vs) : Math.min.apply(null, vs);
+      x.rows.forEach(function(r){ var k = nkey(r.name), p = per[k] = per[k] || { name: r.name, d: {} }; p.d[x.id] = r.val > 0 ? (x.high ? r.val / best : best / r.val) * 100 : 0; }); });
+    var use = ds.filter(function(x){ return mode === "avg" || mode === "sum" || mode === "best" || x.id === mode; });
+    Object.keys(per).forEach(function(k){ var p = per[k], v = use.map(function(x){ return p.d[x.id] || 0; }), s;
+      if(mode === "avg") s = v.reduce(function(a, b){ return a + b; }, 0) / (v.length || 1);
+      else if(mode === "best") s = Math.max.apply(null, v.concat([0]));
+      else s = v.reduce(function(a, b){ return a + b; }, 0);
+      var why = use.map(function(x){ return x.t + " " + (p.d[x.id] != null ? p.d[x.id].toFixed(2) : "not shot"); }).join(", ");
+      if(!use.some(function(x){ return p.d[x.id] != null; })) return;
+      out[k] = { name: p.name, pct: Math.round(s * 100) / 100, why: why, ro: 1 }; });
+    return out;
+  }
   function shootPoints(d){
+    if(isRO(d)) return roPoints(d);
     var sh = (d && d.sheets) || [], neg = d && d.neg !== false, ranked = [], out = {};
     sh.forEach(function(s){ var ok = s.ov && /^\d+/.test(String(s.ov.place)), t = ok ? num(s.ov.total) : null; if(t != null && t > 0) ranked.push({ s: s, t: t }); else out[nkey(s.sh.name)] = { name: s.sh.name, pct: 0, why: s.ov ? String(s.ov.place || "").replace(/^Not ranked – /, "") || "not ranked" : "not ranked" }; });
     if(ranked.length){ var best = neg ? Math.min.apply(null, ranked.map(function(r){ return r.t; })) : Math.max.apply(null, ranked.map(function(r){ return r.t; }));
@@ -833,7 +919,7 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
   }
   function standings(ms, ds, bestN){
     var P = {};
-    ms.forEach(function(m, i){ var sp = shootPoints(ds[i]); Object.keys(sp).forEach(function(k){ var x = sp[k]; var p = P[k] = P[k] || { name: x.name, per: {} }; p.per[m.id] = x; }); });
+    ms.forEach(function(m, i){ var sp = shootPoints(ds[i]); Object.keys(sp).forEach(function(k){ var x = sp[k]; var p = P[k] = P[k] || { name: x.name, per: {} }; if(/,/.test(p.name) && !/,/.test(x.name)) p.name = x.name; p.per[m.id] = x; }); });
     var rows = Object.keys(P).map(function(k){ var p = P[k], v = ms.map(function(m){ return p.per[m.id] ? p.per[m.id].pct : null; }).filter(function(x){ return x != null; }).sort(function(a, b){ return b - a; });
       var n = bestN > 0 ? Math.min(bestN, v.length) : v.length, keep = v.slice(0, n), tot = keep.reduce(function(a, b){ return a + b; }, 0);
       var dropIds = {}; ms.filter(function(m){ return p.per[m.id]; }).sort(function(a, c){ return p.per[a.id].pct - p.per[c.id].pct || String(c.date).localeCompare(String(a.date)); }).slice(0, v.length - n).forEach(function(m){ dropIds[m.id] = 1; });
@@ -842,6 +928,9 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
     rows.forEach(function(r, i){ r.place = i > 0 && r.total === rows[i - 1].total && r.shoots === rows[i - 1].shoots && r.high === rows[i - 1].high ? rows[i - 1].place : i + 1; });
     return rows;
   }
+  function roHow(d){ var m = RO_MODE || d.standings || "avg";
+    return m === "avg" ? "each discipline is scored out of 100 the same way (handgun points: your score ÷ winner’s × 100; long gun time: winner’s time ÷ yours × 100) and the shoot points are the average of the two. A discipline not shot counts 0, just as a missing stage does on a normal shoot." :
+      m === "sum" ? "each discipline is scored out of 100 and the two are added (up to 200)." : m === "best" ? "each shooter’s better discipline counts, out of 100." : "only the " + e(((d.disciplines || []).filter(function(x){ return x.id === m; })[0] || {}).t || m) + " result counts, out of 100."; }
   function showStandings(y, b){
     app.innerHTML = '<div class="card">Working out the standings…</div>';
     getList().then(function(list){ YEAR = y || defYear(); navY();
@@ -852,13 +941,13 @@ function vpResults(m, fontBase){ return vpLoadFonts(fontBase).then(function(f){ 
         var mo = function(m){ var x = /^\d{4}-(\d{2})-(\d{2})/.exec(String(m.date || "")); return x ? MON[+x[1] - 1] + " " + (+x[2]) : e(m.date); };
         var h = '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">' + e(YEAR) + ' season standings</h2><div class="small muted">' + ms.length + ' club shoot' + (ms.length === 1 ? "" : "s") + ' published · ' + rows.length + ' shooters</div></div><a class="btn noprint" href="#y=' + encodeURIComponent(YEAR) + '">All ' + e(YEAR) + ' shoots</a></div>' +
           '<label class="noprint" for="bestN"><b>Counting</b></label><select id="bestN" class="noprint">' + opts + '</select>' +
-          '<div class="how"><b>How points work.</b> Each club shoot gives match points out of 100 from the overall (all stages) result, all competitors together: on time-plus-penalties matches (lowest total wins, Spectre rules) the winner scores 100 and everyone else scores <i>winner’s total ÷ your total × 100</i>; on points matches it is <i>your total ÷ winner’s total × 100</i>. A shooter not ranked at a shoot (DNF, DQ or a missing stage) gets 0 for it. The season score is the sum of ' + (bestN ? 'each shooter’s best ' + bestN + ' shoots (struck-through scores are dropped)' : 'all their shoots') + '. Ties: more shoots, then the best single shoot.</div></div>';
+          '<div class="how"><b>How points work.</b> Each club shoot gives match points out of 100 from the overall (all stages) result, all competitors together: on time-plus-penalties matches (lowest total wins, Spectre rules) the winner scores 100 and everyone else scores <i>winner’s total ÷ your total × 100</i>; on points matches it is <i>your total ÷ winner’s total × 100</i>. A shooter not ranked at a shoot (DNF, DQ or a missing stage) gets 0 for it. The season score is the sum of ' + (bestN ? 'each shooter’s best ' + bestN + ' shoots (struck-through scores are dropped)' : 'all their shoots') + '. Ties: more shoots, then the best single shoot.' + (ds.some(function(d){ return isRO(d) && !d.stageRes; }) ? ' <br><sup>R</sup> <b>Results-only shoots</b> (old paper results with separate handgun and long gun lists, no combined total): ' + roHow(ds.filter(function(d){ return isRO(d) && !d.stageRes; })[0]) : '') + (ds.some(function(d){ return isRO(d) && d.stageRes; }) ? ' <br><sup>R</sup> Shoots with stage results only are scored like any other time match, from the final time.' : '') + '</div></div>';
         if(!ms.length) h += '<div class="card muted">No club shoots published for ' + e(YEAR) + ' yet.</div>';
         else h += '<div class="card"><div class="scroll"><table class="restable stand"><tr><th>#</th><th>Shooter</th><th class="p">Season</th><th class="p">Shoots</th><th class="p">Avg %</th>' + ms.map(function(m){ return '<th class="p"><a href="#m=' + encodeURIComponent(m.id) + '">' + mo(m) + '</a></th>'; }).join("") + '</tr>' +
           rows.map(function(r){ var cells = ms.map(function(m){ var x = r.per[m.id]; if(!x) return '<td class="p muted">–</td>';
               var drop = !!r.dropIds[m.id];
-              return '<td class="p' + (drop ? " drop" : "") + '" title="' + e(x.why || "") + '">' + (x.pct ? x.pct.toFixed(2) : (x.why ? '0 <span class="small">(' + e(x.why) + ')</span>' : "0")) + '</td>'; }).join("");
-            return '<tr' + (r.place <= 3 ? ' class="top3"' : "") + '><td>' + r.place + '</td><td><b>' + e(r.name) + '</b></td><td class="p pts">' + r.total.toFixed(2) + '</td><td class="p">' + r.shoots + '</td><td class="p">' + r.avg.toFixed(1) + '</td>' + cells + '</tr>'; }).join("") + '</table></div></div>';
+              return '<td class="p' + (drop ? " drop" : "") + '" title="' + e(x.why || "") + '">' + (x.ro && x.pct ? x.pct.toFixed(2) + '<sup>R</sup>' : x.pct ? x.pct.toFixed(2) : (x.why ? '0 <span class="small">(' + e(x.why) + ')</span>' : "0")) + '</td>'; }).join("");
+            return '<tr' + (r.place <= 3 ? ' class="top3"' : "") + '><td>' + r.place + '</td><td><b>' + e(r.name) + '</b></td><td class="p pts">' + r.total.toFixed(2) + '</td><td class="p" title="Shoots attended of ' + ms.length + ' held">' + r.shoots + '/' + ms.length + '</td><td class="p">' + r.avg.toFixed(1) + '</td>' + cells + '</tr>'; }).join("") + '</table></div></div>';
         app.innerHTML = h;
         document.getElementById("bestN").onchange = function(){ go("y=" + encodeURIComponent(YEAR) + "&st=1" + (+this.value ? "&b=" + this.value : "")); };
       });
