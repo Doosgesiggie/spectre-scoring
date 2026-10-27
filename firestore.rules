@@ -1,0 +1,279 @@
+rules_version = '2';
+// Spectre Scoring live sync. Anonymous Auth required for everything.
+// rooms/{code}: readable by code (get only – rooms cannot be listed/enumerated); created by any signed-in phone;
+// only the creating phone (createdBy uid) may update it. Scores/sigs: anyone signed-in who knows the code may add;
+// a doc may only be overwritten by the same uid that wrote it. No deletes. Size limits keep docs sane.
+// rooms/{code}/officers/{uid}: RO role claims; with roles set, an RO may only write scores for its own stages, stamped with its name.
+// archive/{aid}: members-only read (signed in with e-mail/password AND approved by an admin), written only by allow-listed publishers.
+// users/{uid}: a member's own profile { email, first, last, approved, ... } - nothing else (never ID or cell numbers). admins/{uid}: console-only.
+// rooms/{code}/results/current: published results snapshot; readable by code, written only by the room creator (unpublish = hidden flag).
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function codeOk(code) { return code.matches('^[A-Z0-9]{6,8}$'); }
+    // archive publishers: allow-list of signed-in uids (the main / match-director phone and the box publisher profile).
+    // publishers/{uid} docs are added by hand in the Firebase console only – no app can write them.
+    function isPub() { return signedIn() && exists(/databases/$(db)/documents/publishers/$(request.auth.uid)); }
+
+    // ---------------- Archive members (e-mail/password accounts) ----------------
+    // admins/{uid}: allow-list of admin uids, added by hand in the Firebase console only (like publishers).
+    function isAdmin() { return signedIn() && exists(/databases/$(db)/documents/admins/$(request.auth.uid)); }
+    function isMember() { return signedIn() && request.auth.token.firebase.sign_in_provider == 'password'; }
+    // approved member: a real e-mail/password account (not an anonymous scoring phone) whose profile an admin approved
+    function approved() { return isMember() && get(/databases/$(db)/documents/users/$(request.auth.uid)).data.approved == true; }
+    function archiveReader() { return approved() || isAdmin() || isPub(); }
+
+    match /admins/{uid} {
+      allow get: if signedIn() && uid == request.auth.uid;   // "am I an admin?"
+      allow list, create, update, delete: if false;
+    }
+    // users/{uid}: only e-mail, first name, surname and approval status (+ timestamps / who approved). No other personal data can be stored.
+    match /users/{uid} {
+      function okStr(v) { return v is string && v.size() >= 1 && v.size() <= 60; }
+      function okName(d) { return okStr(d.first) && okStr(d.last); }
+      allow get: if (signedIn() && uid == request.auth.uid) || isAdmin();
+      allow list: if isAdmin();
+      // self-registration: always starts unapproved; e-mail must be the account's own sign-in e-mail
+      allow create: if isMember() && uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['email','first','last','approved','createdAt'])
+        && request.resource.data.email == request.auth.token.email
+        && okName(request.resource.data) && request.resource.data.approved == false
+        && request.resource.data.createdAt is string && request.resource.data.createdAt.size() < 40;
+      // the member may change only their first name / surname; an admin may change only the approval fields
+      allow update: if (isMember() && uid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['first','last']) && okName(request.resource.data))
+        || (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['approved','approvedBy','approvedAt'])
+          && request.resource.data.approved is bool
+          && request.resource.data.get('approvedBy', '') is string && request.resource.data.get('approvedBy', '').size() < 80
+          && request.resource.data.get('approvedAt', '') is string && request.resource.data.get('approvedAt', '').size() < 40);
+      allow delete: if signedIn() && uid == request.auth.uid;   // a member may remove their own profile
+    }
+
+    match /publishers/{uid} {
+      allow get: if signedIn() && uid == request.auth.uid;   // a phone may only ask "am I a publisher?"
+      allow list, create, update, delete: if false;
+    }
+
+    match /rooms/{code} {
+      allow get: if signedIn() && codeOk(code);
+      allow list: if false;
+      allow create: if signedIn() && codeOk(code)
+        && request.resource.data.code == code
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.pack is string && request.resource.data.pack.size() < 900000
+        && request.resource.data.keys().hasOnly(['code','matchId','matchName','pack','packHash','host','roles','createdBy','createdAt','updatedAt'])
+        && rolesOk(request.resource.data);
+      allow update: if signedIn() && resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.code == code
+        && request.resource.data.pack is string && request.resource.data.pack.size() < 900000
+        && request.resource.data.keys().hasOnly(['code','matchId','matchName','pack','packHash','host','roles','createdBy','createdAt','updatedAt'])
+        && rolesOk(request.resource.data);
+      allow delete: if false;
+
+      // RO roles: roles = { RO_ID: { n: 'RO name', s: [stageIds] } } set by the creator (main phone) only
+      function rolesOk(d) { return !('roles' in d) || (d.roles is map && d.roles.size() <= 30); }
+      function room() { return get(/databases/$(db)/documents/rooms/$(code)).data; }
+      function hasRoles() { return 'roles' in room() && room().roles.size() > 0; }
+      function officerPath() { return /databases/$(db)/documents/rooms/$(code)/officers/$(request.auth.uid); }
+      // creator always; rooms without roles: anyone with the code (as before); with roles: only the RO who claimed
+      // the role, only for its assigned stages, and the stamp must be that RO's name
+      function roleOk(d) {
+        return room().createdBy == request.auth.uid || !hasRoles()
+          || (d.roId is string && d.roId in room().roles && exists(officerPath())
+              && get(officerPath()).data.roId == d.roId
+              && d.stage in room().roles[d.roId].s && d.by == room().roles[d.roId].n);
+      }
+
+      // officers/{uid}: an RO phone claims a role by writing its own doc (doc id = its uid); the name must match the role
+      match /officers/{uid} {
+        allow get: if signedIn() && codeOk(code);
+        allow list: if signedIn() && room().createdBy == request.auth.uid;
+        allow create, update: if signedIn() && uid == request.auth.uid && roomExists()
+          && request.resource.data.keys().hasOnly(['roId','name','uid','deviceId','at'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.roId is string && request.resource.data.roId in room().roles
+          && request.resource.data.name == room().roles[request.resource.data.roId].n
+          && request.resource.data.deviceId is string && request.resource.data.deviceId.size() < 64
+          && request.resource.data.at is string && request.resource.data.at.size() < 40;
+        allow delete: if false;
+      }
+
+      function roomExists() { return exists(/databases/$(db)/documents/rooms/$(code)); }
+
+      match /scores/{id} {
+        allow read: if signedIn() && codeOk(code);
+        allow create: if signedIn() && roomExists() && validScore();
+        allow update: if signedIn() && resource.data.uid == request.auth.uid && validScore();
+        allow delete: if false;
+        function validScore() {
+          let d = request.resource.data;
+          return d.uid == request.auth.uid && d.score is string && d.score.size() < 60000
+            && d.key is string && d.key.size() < 200 && d.rev is int && d.rev > 0 && d.rev < 10000
+            && d.deviceId is string && d.deviceId.size() < 64 && d.deviceName is string && d.deviceName.size() < 100
+            && d.keys().hasOnly(['score','key','rev','deviceId','deviceName','uid','at','stage','by','roId'])
+            && (!('stage' in d) || (d.stage is string && d.key.split('[|]')[0] == d.stage))
+            && (!('by' in d) || (d.by is string && d.by.size() < 100))
+            && (!('roId' in d) || (d.roId is string && d.roId.size() < 16))
+            && roleOk(d);
+        }
+      }
+      match /results/{id} {
+        allow get: if signedIn() && codeOk(code);
+        allow list: if false;
+        allow create, update: if signedIn() && id == 'current' && roomExists()
+          && get(/databases/$(db)/documents/rooms/$(code)).data.createdBy == request.auth.uid
+          && request.resource.data.keys().hasOnly(['v','hidden','publishedAt','matchName','data'])
+          && request.resource.data.v is int && request.resource.data.hidden is bool
+          && request.resource.data.publishedAt is string && request.resource.data.publishedAt.size() < 40
+          && request.resource.data.matchName is string && request.resource.data.matchName.size() < 200
+          && request.resource.data.data is string && request.resource.data.data.size() < 400000;
+        allow delete: if false;
+      }
+      match /sigs/{id} {
+        allow get: if signedIn() && codeOk(code);
+        allow list: if false;
+        allow create: if signedIn() && roomExists() && validSig();
+        allow update: if signedIn() && resource.data.uid == request.auth.uid && validSig();
+        allow delete: if false;
+        function validSig() {
+          let d = request.resource.data;
+          return d.uid == request.auth.uid && d.url is string && d.url.size() < 700000 && d.url.matches('^data:image/.*')
+            && d.deviceId is string && d.deviceId.size() < 64 && d.keys().hasOnly(['url','deviceId','uid']);
+        }
+      }
+    }
+
+    // ---------------- Members-only score sheet archive ----------------
+    // archive/{aid}: index doc of one published match (no personal data beyond names in the data doc; never e-mails).
+    //   Read only by approved members / admins / publishers while not hidden (list queries must filter hidden == false). Only allow-listed publishers
+    //   (publishers/{uid}) may create or update it; unpublish = hidden:true + empty data. No deletes.
+    // archive/{aid}/data/main: { v, data } the sheets + results JSON; approved members get it while the index is not hidden.
+    match /archive/{aid} {
+      function idx() { return get(/databases/$(db)/documents/archive/$(aid)).data; }
+      function validIdx(d) {
+        return d.keys().hasOnly(['v','matchName','date','venue','publishedAt','hidden','createdBy','shooters','stages'])
+          && d.v is int && d.hidden is bool && d.createdBy == request.auth.uid
+          && d.matchName is string && d.matchName.size() <= 200 && d.date is string && d.date.size() <= 20
+          && d.venue is string && d.venue.size() <= 120 && d.publishedAt is string && d.publishedAt.size() < 40
+          && d.shooters is int && d.stages is int;
+      }
+      allow get: if (resource.data.hidden == false && archiveReader()) || isPub();
+      allow list: if resource.data.hidden == false && archiveReader();
+      allow create: if isPub() && aid.matches('^[A-Z0-9]{12,20}$') && validIdx(request.resource.data);
+      allow update: if isPub() && validIdx(request.resource.data);   // any publisher may update / unpublish (createdBy = last publisher)
+      allow delete: if false;
+
+      match /data/{did} {
+        allow get: if did == 'main' && exists(/databases/$(db)/documents/archive/$(aid)) && ((idx().hidden == false && archiveReader()) || isPub());
+        allow list, delete: if false;
+        allow create, update: if signedIn() && did == 'main' && exists(/databases/$(db)/documents/archive/$(aid))
+          && isPub()
+          && request.resource.data.keys().hasOnly(['v','data']) && request.resource.data.v is int
+          && request.resource.data.data is string && request.resource.data.data.size() < 900000
+          && (idx().hidden == false || request.resource.data.data == '');
+      }
+    }
+
+    // ---------------- Public "Scan to verify" copies ----------------
+    // verify/{tok}: one published score sheet, read-only for ANYONE (signed out too) who holds the unguessable 128-bit token
+    // (base64url, 22+ chars) printed as a QR on that sheet. No list, so tokens cannot be enumerated. Written only by archive
+    // publishers, the same as archive writes, and only for an existing archive record. Unpublish = hidden:true + empty data. No deletes.
+    // data = JSON text of that sheet only (shooter name, match, stage rows, overall) – never e-mail, ID, cell or member numbers.
+    match /verify/{tok} {
+      function tokOk() { return tok.matches('^[A-Za-z0-9_-]{22,64}$'); }
+      allow get: if tokOk();
+      allow list, delete: if false;
+      allow create, update: if isPub() && tokOk()
+        && request.resource.data.keys().hasOnly(['v','rid','hidden','at','data'])
+        && request.resource.data.v is int && request.resource.data.hidden is bool
+        && request.resource.data.rid is string && request.resource.data.rid.matches('^[A-Z0-9]{12,20}$')
+        && exists(/databases/$(db)/documents/archive/$(request.resource.data.rid))
+        && request.resource.data.at is string && request.resource.data.at.size() < 40
+        && request.resource.data.data is string && request.resource.data.data.size() < 400000
+        && (request.resource.data.hidden == false || request.resource.data.data == '');
+    }
+
+    // ---------------- Shooter registration ----------------
+    // regs/{code}: the match registration (no personal data). Readable by code (get only), written only by the creator.
+    // regs/{code}/counts/{squadId}: public squad counters {n,last}. Each change must be paired, in the same transaction,
+    //   with the entry change it describes (entry id in `last`), so counts cannot drift and slot limits hold.
+    // regs/{code}/entries/{token}: one shooter entry. The 24-char random doc id IS the private edit token:
+    //   get/update only by someone holding the token (bound to their anonymous uid on every write); list only by the organiser.
+    //   Personal data (email etc.) never appears in a publicly listable doc.
+    match /regs/{code} {
+      function reg() { return get(/databases/$(db)/documents/regs/$(code)).data; }
+      function isOrg() { return signedIn() && reg().createdBy == request.auth.uid; }
+      function regOpen() { return !reg().closed && request.time.toMillis() < reg().closesMs; }
+      function validReg(d) {
+        return d.keys().hasOnly(['code','name','date','venue','divisions','disc','classes','cats','squads','closesMs','closed','createdBy','createdAt','updatedAt','note','v'])
+          && d.code == code && d.name is string && d.name.size() > 0 && d.name.size() <= 120
+          && d.date is string && d.date.size() <= 20 && d.venue is string && d.venue.size() <= 120
+          && d.divisions is list && d.divisions.size() > 0 && d.divisions.size() <= 40
+          && (!('disc' in d) || (d.disc is map && d.disc.keys().hasOnly(['handgun','shotgun','rifle'])))
+          && d.classes is list && d.classes.size() <= 20 && d.cats is list && d.cats.size() <= 20
+          && d.squads is map && d.squads.size() > 0 && d.squads.size() <= 40
+          && d.closesMs is int && d.closed is bool && d.note is string && d.note.size() <= 1000;
+      }
+      allow get: if signedIn() && codeOk(code);
+      allow list, delete: if false;
+      allow create: if signedIn() && codeOk(code) && request.resource.data.createdBy == request.auth.uid && validReg(request.resource.data);
+      allow update: if signedIn() && resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdBy == resource.data.createdBy && validReg(request.resource.data);
+
+      match /counts/{sq} {
+        function entryAt(e) { return /databases/$(db)/documents/regs/$(code)/entries/$(e); }
+        function inSqBefore(e) { return exists(entryAt(e)) && get(entryAt(e)).data.status == 'active' && get(entryAt(e)).data.squad == sq; }
+        function inSqAfter(e) { return existsAfter(entryAt(e)) && getAfter(entryAt(e)).data.status == 'active' && getAfter(entryAt(e)).data.squad == sq; }
+        allow get, list: if signedIn();
+        allow delete: if false;
+        // organiser seeds a counter at 0 when the squad is created
+        allow create: if isOrg() && sq in reg().squads && request.resource.data.n == 0 && request.resource.data.last == ''
+          && request.resource.data.keys().hasOnly(['n','last']);
+        allow update: if signedIn() && request.resource.data.keys().hasOnly(['n','last']) && request.resource.data.last is string
+          && request.resource.data.n is int && request.resource.data.n >= 0
+          && ((request.resource.data.n == resource.data.n + 1 && request.resource.data.n <= reg().squads[sq].max
+               && !inSqBefore(request.resource.data.last) && inSqAfter(request.resource.data.last))
+           || (request.resource.data.n == resource.data.n - 1
+               && inSqBefore(request.resource.data.last) && !inSqAfter(request.resource.data.last)));
+      }
+
+      match /entries/{tok} {
+        function cntPath(s) { return /databases/$(db)/documents/regs/$(code)/counts/$(s); }
+        function cntB(s) { return get(cntPath(s)).data.n; }
+        function cntA(s) { return getAfter(cntPath(s)).data; }
+        function str(v, n) { return v is string && v.size() <= n; }
+        function validEntry(d) {
+          return d.keys().hasOnly(['first','last','member','visitor','email','division','pf','divs','cls','cat','squad','status','paid','uid','createdAt','updatedAt'])
+            && str(d.first, 60) && str(d.last, 60) && (d.first.size() + d.last.size()) > 0 && str(d.member, 40) && str(d.email, 120)
+            && str(d.division, 60) && d.division.size() > 0 && d.pf in ['minor','major'] && str(d.cls, 40) && str(d.cat, 40)
+            && d.squad is string && d.squad in reg().squads && d.status in ['active','cancelled','removed']
+            && d.paid is bool && (!('visitor' in d) || d.visitor is bool)
+            && (!('divs' in d) || (d.divs is map && d.divs.keys().hasOnly(['handgun','shotgun','rifle']))) && str(d.createdAt, 40) && str(d.updatedAt, 40);
+        }
+        // the counter of the squad being joined goes +1 (within its limit) and the one being left goes -1, both naming this entry
+        function joinOk(d) { return cntA(d.squad).n == cntB(d.squad) + 1 && cntA(d.squad).last == tok; }
+        function leaveOk(o) { return cntA(o.squad).n == cntB(o.squad) - 1 && cntA(o.squad).last == tok; }
+        function countsOk(o, d) {
+          let wasA = o.status == 'active'; let isA = d.status == 'active'; let same = wasA && isA && o.squad == d.squad;
+          return (!wasA || same || leaveOk(o)) && (!isA || same || joinOk(d));
+        }
+        allow get: if signedIn() && tok.matches('^[A-Za-z0-9]{24}$');
+        allow list: if isOrg();
+        allow delete: if false;
+        allow create: if signedIn() && tok.matches('^[A-Za-z0-9]{24}$') && regOpen() && validEntry(request.resource.data)
+          && request.resource.data.uid == request.auth.uid && request.resource.data.status == 'active' && request.resource.data.paid == false
+          && joinOk(request.resource.data);
+        // shooter (token holder): edit / cancel / re-enter while open; cannot touch 'paid' or set 'removed'
+        // organiser: only 'paid' and 'status' (removed/active) + updatedAt, any time
+        allow update: if signedIn() && validEntry(request.resource.data) && countsOk(resource.data, request.resource.data)
+          && ((regOpen() && request.resource.data.uid == request.auth.uid && request.resource.data.paid == resource.data.paid
+               && request.resource.data.createdAt == resource.data.createdAt
+               && request.resource.data.status in ['active','cancelled'] && resource.data.status != 'removed')
+           || (isOrg() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid','status','updatedAt'])
+               && request.resource.data.status in ['active','removed']));
+      }
+    }
+  }
+}
