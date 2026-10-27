@@ -19,6 +19,7 @@ main{max-width:980px;margin:0 auto;padding:12px}
 .badge small{display:block;font-weight:400;color:#333;margin-top:2px}
 .paper{background:#fff;width:210mm;max-width:100%;padding:10mm;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.15);overflow-x:auto}
 .rp{width:297mm}.rp h2{margin:0 0 2px;font-family:var(--cond);color:var(--navy);text-transform:uppercase}.rp h3{margin:14px 0 2px;font-family:var(--cond);color:var(--navy)}.rmeta{margin:0 0 4px;color:var(--muted);font-size:.85em}
+.att{border-collapse:collapse;width:100%;font-size:.85em}.att th{background:var(--navy);color:#fff;text-align:left;padding:4px 6px}.att td{border-bottom:1px solid var(--border);padding:4px 6px}.att tr:nth-child(even) td{background:#f4f6f9}
 .rtw{overflow-x:auto}.rt{border-collapse:collapse;width:100%;font-size:.8em}.rt th{background:var(--navy);color:#fff;padding:3px 5px;text-align:left}.rt td{border-bottom:1px solid var(--border);padding:2px 5px}.rt tr:nth-child(even) td{background:#f4f6f9}
 @media print{.rt{font-size:7.5pt}.rp h3{break-after:avoid}.rt tr{break-inside:avoid}}
 .sheet{font-size:10pt;color:#000;background:#fff}
@@ -132,6 +133,48 @@ function spQRPdfPlace(doc, tok, ends, R, BOT, cap){ if(!spTokOk(tok)) return 0; 
   if(ends[n] != null && ends[n] < lim) p = n; else if(ends[1] != null && ends[1] < lim) p = 1;
   if(!p) return 0; doc.setPage(p); var ok = spQRPdf(doc, tok, R - 58, BOT - 72, 56); if(ok) cap(p); doc.setPage(n); return ok ? p : 0; }
 
+/* ===================== Shooter attendance record (one page) =====================
+   Built ONLY from publisher-written results copies (verify/{rt} docs, kind "results") and the admin-linked users/{uid}.shooterName.
+   The public attendance verify doc stores just { kind, name, rts[] }: verify.html re-reads each public results copy and re-derives
+   every row, so a shooter cannot type in placings. No IDs, cell numbers or e-mail addresses are read, stored or printed. */
+function atNorm(s){ return String(s || "").toLowerCase().replace(/\s+/g, " ").trim(); }
+function atCol(h, re){ for(var i = 0; i < h.length; i++) if(re.test(h[i] || "")) return i; return -1; }
+/* one results copy -> this shooter's row, or null if they did not shoot */
+function atRow(name, d){
+  var n = atNorm(name), mt = d.match || {}, T = d.tables || [], o = T[0]; if(!o) return null;
+  var ci = atCol(o.h, /^shooter$/i), ri = atCol(o.h, /^(#|rank)$/i); if(ci < 0) return null;
+  var me = (o.r || []).filter(function(r){ return atNorm(r[ci]) === n; })[0]; if(!me) return null;
+  var pi = -1; for(var i = o.h.length - 1; i >= 0; i--) if(/points|total/i.test(o.h[i] || "") && !/\(/.test(o.h[i])){ pi = i; break; }
+  var pts = pi >= 0 ? String(me[pi]) : "", ranked = (o.r || []).filter(function(r){ return /^\d+$/.test(String(r[ri])); }).length;
+  var div = [];
+  function cls(t){ var c = atCol(t.h || [], /^class$/i), s = atCol(t.h || [], /^shooter$/i); if(c < 0 || s < 0) return "";
+    var r = (t.r || []).filter(function(x){ return atNorm(x[s]) === n; })[0]; return r ? String(r[c]) : ""; }
+  T.forEach(function(t){ var lab = /^handgun results$/i.test(t.t) ? "HG " : /^long ?gun results$/i.test(t.t) ? "LG " : null; if(lab === null) return; var v = cls(t); if(v) div.push(lab + v); });
+  if(!div.length){ var v0 = cls(o); div.push(v0 || "–"); }
+  var place = /^\d+$/.test(String(me[ri])) ? me[ri] + " / " + ranked : String(me[ri] || "–");
+  return { date: mt.date || "", match: mt.name || "", venue: mt.venue || "", div: div.join(" · ") || "–", place: place,
+    pts: pts + (/^[\d.]+$/.test(pts) ? (/total/i.test(o.h[pi]) ? " s" : " pts") : ""), basis: o.t || "" };
+}
+function atRows(name, docs){ return docs.map(function(d){ return atRow(name, d); }).filter(Boolean).sort(function(a, b){ return a.date < b.date ? -1 : 1; }); }
+var AT_CSS = '.atp{font-family:Barlow,"Segoe UI",Arial,sans-serif;color:#111;width:186mm;margin:0 auto}' +
+  '.athd{display:flex;align-items:center;gap:6mm;background:#14284b;color:#fff;border-bottom:1.2mm solid #c59a1e;padding:4mm 5mm}.athd .splogo{height:15mm;width:44mm}' +
+  '.athd h1{margin:0;font:800 17pt "Barlow Condensed",Arial Narrow,sans-serif;text-transform:uppercase;letter-spacing:.02em}.athd p{margin:1mm 0 0;font-size:9pt;color:#dfe5ef}' +
+  '.atnm{font:700 20pt "Barlow Condensed",sans-serif;color:#14284b;margin:6mm 0 1mm}.atsub{color:#5a6475;font-size:9pt;margin:0 0 4mm}' +
+  '.att{border-collapse:collapse;width:100%;font-size:9.5pt}.att th{background:#14284b;color:#fff;text-align:left;padding:1.6mm 2mm}.att td{border-bottom:.3mm solid #c9d2e0;padding:1.6mm 2mm}.att tr:nth-child(even) td{background:#f4f6f9}' +
+  '.atft{display:flex;gap:5mm;align-items:center;margin-top:7mm;border-top:.4mm solid #c9d2e0;padding-top:4mm;font-size:8.5pt;color:#333}.atft .spqr{width:28mm;height:28mm;flex:none}.atft b{color:#14284b}';
+function atTable(rows){ return '<table class="att"><thead><tr><th>Date</th><th>Match</th><th>Division</th><th>Placing</th><th>Points</th></tr></thead><tbody>' +
+  rows.map(function(r){ return '<tr><td>' + shEsc(r.date) + '</td><td>' + shEsc(r.match) + (r.venue ? '<br><small>' + shEsc(r.venue) + '</small>' : "") + '</td><td>' + shEsc(r.div) + '</td><td>' + shEsc(r.place) + '</td><td>' + shEsc(r.pts) + '</td></tr>'; }).join("") + '</tbody></table>'; }
+/* printable page; tok = the shooter's published attendance token, or "" when they chose not to publish (no QR then) */
+function atPageHTML(name, rows, tok, made){
+  var yrs = rows.map(function(r){ return r.date.slice(0, 4); }).filter(function(v, i, a){ return a.indexOf(v) === i; }).join(", ");
+  return '<div class="atp"><div class="athd">' + spLogoSVG("navybar") + '<div><h1>Shooter attendance record</h1><p>Spectre Tactical Shooting · club shoots ' + shEsc(yrs) + '</p></div></div>' +
+    '<div class="atnm">' + shEsc(name) + '</div><p class="atsub">' + rows.length + ' shoot' + (rows.length === 1 ? "" : "s") + ' attended · from the published Spectre results archive · generated ' + shEsc(made) + '</p>' + atTable(rows) +
+    '<div class="atft">' + (tok ? spQRSVG(spVerifyURL(tok)) + '<div><b>Scan to verify.</b> The QR opens a public page that rebuilds this list from the published results, so it cannot be edited by hand.<br>' + shEsc(spVerifyURL(tok)) + '</div>'
+      : '<div>Not published: this copy has no verify QR.</div>') + '</div></div>';
+}
+/* the public verify doc payload (the shooter's choice to publish): references only, no rows, no personal details */
+function atVerifyDoc(name, rts, made){ return { v: 1, kind: "attendance", name: name, rts: rts, publishedAt: made }; }
+
 /* ===================== score sheet renderer – shared by the app (print / PDF) and the public archive page =====================
    Input is a plain, JSON-safe sheet object (see sheetData in s-sheets.js), so the archive can draw the same layout from published data.
    d = { match:{name,date,venue,md,note}, neg, ver, sh:{name,no,member,squad,divs,cat,visitor}, rows:[{no,title,none,note}|{no,title,note,hz,pz1,pz2,miss,standing,pen,ns,time,penT,score,place,by,at,sigKey}], ov:{total,place,of,label}, method }
@@ -182,6 +225,17 @@ function sheetRender(d, sigs, printed){
     if(hidden || !data){ msg("This copy has been withdrawn from the archive.", "Ask the Match Director for the current results."); return; }
     var rid = (f.rid && f.rid.stringValue) || "";
     var d = JSON.parse(data), at = d.publishedAt ? String(d.publishedAt).slice(0, 10) : "";
+    if(d.kind === "attendance"){ /* re-derived from the publisher-written public results copies; nothing in this doc is trusted except the admin-linked name */
+      var base = url.split("/verify/")[0] + "/verify/", key = url.indexOf("?") >= 0 ? url.slice(url.indexOf("?")) : "";
+      var rts = (d.rts || []).filter(function(t){ return /^[A-Za-z0-9_-]{22,64}$/.test(t); }).slice(0, 60);
+      Promise.all(rts.map(function(t){ return fetch(base + t + key, { cache: "no-store" }).then(function(r){ return r.ok ? r.json() : null; }).then(function(x){
+        var g = x && x.fields || {}; if(!g.data || !g.data.stringValue || (g.hidden && g.hidden.booleanValue)) return null; var y = JSON.parse(g.data.stringValue); return y.kind === "results" ? y : null; }).catch(function(){ return null; }); }))
+      .then(function(docs){ var rows = atRows(d.name || "", docs.filter(Boolean));
+        document.title = (d.name || "Shooter") + " – verified attendance";
+        if(!rows.length){ msg("No published results were found for this attendance record."); return; }
+        app.innerHTML = '<div class="badge">✔ Verified attendance record, rebuilt from the Spectre Tactical Shooting results archive<small>' + e(d.name || "") + " · " + rows.length + " shoot" + (rows.length === 1 ? "" : "s") + (at ? " · published " + e(at) : "") + '</small></div>' +
+          '<div class="paper"><h2 style="margin:0 0 4mm;font-family:var(--cond);color:var(--navy)">' + e(d.name || "") + '</h2>' + atTable(rows) + '</div>'; });
+      return; }
     if(d.kind === "results"){ var mt = d.match || {};
       document.title = (mt.name || "Results") + " – verified results";
       app.innerHTML = '<div class="badge">✔ Verified copy of the results from the Spectre Tactical Shooting archive<small>' + e(mt.name || "") + (at ? " · published " + e(at) : "") + '</small></div>' +

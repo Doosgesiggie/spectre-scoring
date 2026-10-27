@@ -140,7 +140,7 @@ ul.hits{list-style:none;margin:8px 0 0;padding:0}ul.hits li{border-top:1px solid
 </head>
 <body>
 <header><h1>Spectre Tactical Shooting – score sheet archive</h1><div class="sub">Published match results. Find your name to view or download your score sheet.</div></header>
-<nav class="anav noprint"><a href="#" id="navRes">Results</a><a href="#rules" id="navRules">Rules</a><span id="navUser"></span></nav>
+<nav class="anav noprint"><a href="#" id="navRes">Results</a><a href="#rules" id="navRules">Rules</a><a href="#att" id="navAtt">My attendance</a><span id="navUser"></span></nav>
 <main id="app"><div class="card">Loading…</div></main>
 <template id="rulesTpl"><div class="card rules">
 <h2>Club match rules</h2>
@@ -792,6 +792,48 @@ function spQRPdfPlace(doc, tok, ends, R, BOT, cap){ if(!spTokOk(tok)) return 0; 
   if(ends[n] != null && ends[n] < lim) p = n; else if(ends[1] != null && ends[1] < lim) p = 1;
   if(!p) return 0; doc.setPage(p); var ok = spQRPdf(doc, tok, R - 58, BOT - 72, 56); if(ok) cap(p); doc.setPage(n); return ok ? p : 0; }
 
+/* ===================== Shooter attendance record (one page) =====================
+   Built ONLY from publisher-written results copies (verify/{rt} docs, kind "results") and the admin-linked users/{uid}.shooterName.
+   The public attendance verify doc stores just { kind, name, rts[] }: verify.html re-reads each public results copy and re-derives
+   every row, so a shooter cannot type in placings. No IDs, cell numbers or e-mail addresses are read, stored or printed. */
+function atNorm(s){ return String(s || "").toLowerCase().replace(/\s+/g, " ").trim(); }
+function atCol(h, re){ for(var i = 0; i < h.length; i++) if(re.test(h[i] || "")) return i; return -1; }
+/* one results copy -> this shooter's row, or null if they did not shoot */
+function atRow(name, d){
+  var n = atNorm(name), mt = d.match || {}, T = d.tables || [], o = T[0]; if(!o) return null;
+  var ci = atCol(o.h, /^shooter$/i), ri = atCol(o.h, /^(#|rank)$/i); if(ci < 0) return null;
+  var me = (o.r || []).filter(function(r){ return atNorm(r[ci]) === n; })[0]; if(!me) return null;
+  var pi = -1; for(var i = o.h.length - 1; i >= 0; i--) if(/points|total/i.test(o.h[i] || "") && !/\(/.test(o.h[i])){ pi = i; break; }
+  var pts = pi >= 0 ? String(me[pi]) : "", ranked = (o.r || []).filter(function(r){ return /^\d+$/.test(String(r[ri])); }).length;
+  var div = [];
+  function cls(t){ var c = atCol(t.h || [], /^class$/i), s = atCol(t.h || [], /^shooter$/i); if(c < 0 || s < 0) return "";
+    var r = (t.r || []).filter(function(x){ return atNorm(x[s]) === n; })[0]; return r ? String(r[c]) : ""; }
+  T.forEach(function(t){ var lab = /^handgun results$/i.test(t.t) ? "HG " : /^long ?gun results$/i.test(t.t) ? "LG " : null; if(lab === null) return; var v = cls(t); if(v) div.push(lab + v); });
+  if(!div.length){ var v0 = cls(o); div.push(v0 || "–"); }
+  var place = /^\d+$/.test(String(me[ri])) ? me[ri] + " / " + ranked : String(me[ri] || "–");
+  return { date: mt.date || "", match: mt.name || "", venue: mt.venue || "", div: div.join(" · ") || "–", place: place,
+    pts: pts + (/^[\d.]+$/.test(pts) ? (/total/i.test(o.h[pi]) ? " s" : " pts") : ""), basis: o.t || "" };
+}
+function atRows(name, docs){ return docs.map(function(d){ return atRow(name, d); }).filter(Boolean).sort(function(a, b){ return a.date < b.date ? -1 : 1; }); }
+var AT_CSS = '.atp{font-family:Barlow,"Segoe UI",Arial,sans-serif;color:#111;width:186mm;margin:0 auto}' +
+  '.athd{display:flex;align-items:center;gap:6mm;background:#14284b;color:#fff;border-bottom:1.2mm solid #c59a1e;padding:4mm 5mm}.athd .splogo{height:15mm;width:44mm}' +
+  '.athd h1{margin:0;font:800 17pt "Barlow Condensed",Arial Narrow,sans-serif;text-transform:uppercase;letter-spacing:.02em}.athd p{margin:1mm 0 0;font-size:9pt;color:#dfe5ef}' +
+  '.atnm{font:700 20pt "Barlow Condensed",sans-serif;color:#14284b;margin:6mm 0 1mm}.atsub{color:#5a6475;font-size:9pt;margin:0 0 4mm}' +
+  '.att{border-collapse:collapse;width:100%;font-size:9.5pt}.att th{background:#14284b;color:#fff;text-align:left;padding:1.6mm 2mm}.att td{border-bottom:.3mm solid #c9d2e0;padding:1.6mm 2mm}.att tr:nth-child(even) td{background:#f4f6f9}' +
+  '.atft{display:flex;gap:5mm;align-items:center;margin-top:7mm;border-top:.4mm solid #c9d2e0;padding-top:4mm;font-size:8.5pt;color:#333}.atft .spqr{width:28mm;height:28mm;flex:none}.atft b{color:#14284b}';
+function atTable(rows){ return '<table class="att"><thead><tr><th>Date</th><th>Match</th><th>Division</th><th>Placing</th><th>Points</th></tr></thead><tbody>' +
+  rows.map(function(r){ return '<tr><td>' + shEsc(r.date) + '</td><td>' + shEsc(r.match) + (r.venue ? '<br><small>' + shEsc(r.venue) + '</small>' : "") + '</td><td>' + shEsc(r.div) + '</td><td>' + shEsc(r.place) + '</td><td>' + shEsc(r.pts) + '</td></tr>'; }).join("") + '</tbody></table>'; }
+/* printable page; tok = the shooter's published attendance token, or "" when they chose not to publish (no QR then) */
+function atPageHTML(name, rows, tok, made){
+  var yrs = rows.map(function(r){ return r.date.slice(0, 4); }).filter(function(v, i, a){ return a.indexOf(v) === i; }).join(", ");
+  return '<div class="atp"><div class="athd">' + spLogoSVG("navybar") + '<div><h1>Shooter attendance record</h1><p>Spectre Tactical Shooting · club shoots ' + shEsc(yrs) + '</p></div></div>' +
+    '<div class="atnm">' + shEsc(name) + '</div><p class="atsub">' + rows.length + ' shoot' + (rows.length === 1 ? "" : "s") + ' attended · from the published Spectre results archive · generated ' + shEsc(made) + '</p>' + atTable(rows) +
+    '<div class="atft">' + (tok ? spQRSVG(spVerifyURL(tok)) + '<div><b>Scan to verify.</b> The QR opens a public page that rebuilds this list from the published results, so it cannot be edited by hand.<br>' + shEsc(spVerifyURL(tok)) + '</div>'
+      : '<div>Not published: this copy has no verify QR.</div>') + '</div></div>';
+}
+/* the public verify doc payload (the shooter's choice to publish): references only, no rows, no personal details */
+function atVerifyDoc(name, rts, made){ return { v: 1, kind: "attendance", name: name, rts: rts, publishedAt: made }; }
+
 </script>
 <script>
 /* Results packs for results-only (kind:"results") archive records, the season standings PDF and the participation summary.
@@ -1022,11 +1064,16 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
     F.getDocs(F.collection(db, "users")).then(function(q){
       var us = q.docs.map(function(d){ var x = d.data(); x.uid = d.id; return x; }).sort(function(a, b){ return (a.approved === b.approved ? 0 : a.approved ? 1 : -1) || (String(a.last) + " " + a.first).localeCompare(String(b.last) + " " + b.first); });
       var pend = us.filter(function(u){ return !u.approved; }).length;
-      app.innerHTML = '<div class="card"><h3>Archive members</h3><p class="small muted">' + us.length + ' account' + (us.length === 1 ? "" : "s") + ', ' + pend + ' waiting. Approve only people you know. Revoking takes effect on their next page load.</p><table class="mem" id="memTbl"><tr><th>Full name</th><th>E-mail</th><th>Registered</th><th>Status</th><th></th></tr>' + us.map(function(u){
-        return '<tr data-uid="' + e(u.uid) + '"><td>' + e(u.first + " " + u.last) + '</td><td>' + e(u.email) + '</td><td>' + e(String(u.createdAt || "").slice(0, 10)) + '</td><td>' + (u.approved ? '<span class="chip ok">Approved</span>' : '<span class="chip warn">Waiting</span>') + '</td><td>' + (u.uid === ME.user.uid ? "" : '<button type="button" class="slim mem-b" data-a="' + (u.approved ? 0 : 1) + '">' + (u.approved ? "Revoke" : "Approve") + '</button>') + '</td></tr>'; }).join("") + '</table></div>';
+      app.innerHTML = '<div class="card"><h3>Archive members</h3><p class="small muted">' + us.length + ' account' + (us.length === 1 ? "" : "s") + ', ' + pend + ' waiting. Approve only people you know. Revoking takes effect on their next page load.</p><table class="mem" id="memTbl"><tr><th>Full name</th><th>E-mail</th><th>Registered</th><th>Status</th><th>Results name</th><th></th></tr>' + us.map(function(u){
+        return '<tr data-uid="' + e(u.uid) + '"><td>' + e(u.first + " " + u.last) + '</td><td>' + e(u.email) + '</td><td>' + e(String(u.createdAt || "").slice(0, 10)) + '</td><td>' + (u.approved ? '<span class="chip ok">Approved</span>' : '<span class="chip warn">Waiting</span>') + '</td><td>' + (u.approved ? '<input class="mem-n" value="' + e(u.shooterName || "") + '" placeholder="as on results" style="width:11em"> <button type="button" class="slim mem-l">Link</button>' : "") + '</td><td>' + (u.uid === ME.user.uid ? "" : '<button type="button" class="slim mem-b" data-a="' + (u.approved ? 0 : 1) + '">' + (u.approved ? "Revoke" : "Approve") + '</button>') + '</td></tr>'; }).join("") + '</table></div>';
       Array.prototype.forEach.call(document.querySelectorAll(".mem-b"), function(b){ b.onclick = function(){
         var uid = b.closest("tr").getAttribute("data-uid"), ok = b.getAttribute("data-a") === "1"; b.disabled = true;
         F.updateDoc(F.doc(db, "users", uid), { approved: ok, approvedBy: String(ME.prof ? ME.prof.first + " " + ME.prof.last : ME.user.email).slice(0, 79), approvedAt: new Date().toISOString() }).then(showAdmin, function(er){ alert("Could not save: " + (er && er.message || er)); b.disabled = false; }); }; });
+      /* admin-only link of an account to the name used on the results sheets (members cannot set this themselves: firestore.rules) */
+      Array.prototype.forEach.call(document.querySelectorAll(".mem-l"), function(b){ b.onclick = function(){
+        var tr = b.closest("tr"), nm = tr.querySelector(".mem-n").value.replace(/\s+/g, " ").trim().slice(0, 80); b.disabled = true;
+        F.updateDoc(F.doc(db, "users", tr.getAttribute("data-uid")), { shooterName: nm, shooterLinkedBy: String(ME.prof ? ME.prof.first + " " + ME.prof.last : "admin").slice(0, 79), shooterLinkedAt: new Date().toISOString() })
+          .then(showAdmin, function(er){ alert("Could not save: " + (er && er.message || er)); b.disabled = false; }); }; });
     }).catch(fail);
   }
   function hash(){ var o = {}; location.hash.replace(/^#/, "").split("&").forEach(function(p){ var kv = p.split("="); if(kv[0]) o[kv[0]] = decodeURIComponent(kv[1] || ""); }); return o; }
@@ -1292,6 +1339,29 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
       });
     }).catch(fail);
   }
+  /* ---------- my attendance record (approved member whose results name an admin has linked: users/{uid}.shooterName) ---------- */
+  function attDocs(){ var cfg = window.SS_FIREBASE_TEST || window.SS_FIREBASE_CONFIG, base = "https://firestore.googleapis.com/v1/projects/" + cfg.projectId + "/databases/(default)/documents/verify/", key = "?key=" + encodeURIComponent(cfg.apiKey);
+    if(window.SS_ATT_FAKE) return Promise.resolve(window.SS_ATT_FAKE);
+    return getList().then(function(L){ return Promise.all(L.map(function(m){ return matchData(m.id).catch(function(){ return null; }); })); }).then(function(ms){
+      var rts = ms.filter(function(m){ return m && m.rt; }).map(function(m){ return m.rt; });
+      return Promise.all(rts.map(function(t){ return fetch(base + t + key, { cache: "no-store" }).then(function(r){ return r.ok ? r.json() : null; }).then(function(x){ var g = x && x.fields || {};
+        if(!g.data || !g.data.stringValue || (g.hidden && g.hidden.booleanValue)) return null; var y = JSON.parse(g.data.stringValue); return y.kind === "results" ? { rt: t, d: y } : null; }).catch(function(){ return null; }); })); }).then(function(a){ return a.filter(Boolean); }); }
+  function showAttendance(){
+    var nm = ME.prof && ME.prof.shooterName;
+    if(!nm){ app.innerHTML = '<div class="card"><h2 style="margin:0">My attendance record</h2><p>Your account is not linked to a name in the results yet. Ask an admin to link it (they match your account to the name used on the results sheets).</p></div>'; return; }
+    app.innerHTML = '<div class="card"><p>Building your record…</p></div>';
+    attDocs().then(function(all){
+      var mine = all.filter(function(x){ return atRow(nm, x.d); }), rows = atRows(nm, mine.map(function(x){ return x.d; })), tok = ME.prof.attTok || "", made = new Date().toISOString().slice(0, 10);
+      app.innerHTML = '<div class="card noprint"><h2 style="margin:0">My attendance record</h2><p class="small muted">' + rows.length + ' shoots found for <b>' + e(nm) + '</b>. Publishing is your choice: it creates a public page (the QR) that lists only your name and these shoots.</p>' +
+        '<button class="btn" id="attPrint">Print / save PDF</button> <button class="btn" id="attPub">' + (tok ? "Update published copy" : "Publish with a verify QR") + '</button>' + (tok ? ' <button class="btn" id="attUnpub">Withdraw</button>' : "") + '</div>' +
+        '<style>' + AT_CSS + '</style><div class="paper">' + atPageHTML(nm, rows, tok, made) + '</div>';
+      document.getElementById("attPrint").onclick = function(){ window.print(); };
+      function put(hidden){ var t = tok || spNewToken(), doc = atVerifyDoc(nm, mine.map(function(x){ return x.rt; }), made);
+        return sdk().then(function(){ return F.setDoc(F.doc(db, "verify", t), { v: 1, kind: "attendance", uid: ME.user.uid, hidden: hidden, at: new Date().toISOString(), data: hidden ? "" : JSON.stringify(doc) }); })
+          .then(function(){ return tok ? null : F.updateDoc(F.doc(db, "users", ME.user.uid), { attTok: t }); }).then(function(){ if(!tok) ME.prof.attTok = t; showAttendance(); }, function(er){ alert("Could not publish: " + (er && er.message || er)); }); }
+      document.getElementById("attPub").onclick = function(){ if(confirm("Publish a public verify page with your name and the shoots listed?")) put(false); };
+      var u = document.getElementById("attUnpub"); if(u) u.onclick = function(){ put(true); };
+    }, fail); }
   function route(){ var h = hash(); window.scrollTo(0, 0);
     var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; var nr = document.getElementById("navRes"); nr.className = rules ? "" : "on"; navY();
     if(rules){ app.innerHTML = RULES_HTML; return; }
@@ -1299,6 +1369,7 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
     if(!window.SS_ARCHIVE_FAKE && !ME.user) return showGate();
     if(!member()) return showPending();
     if(/^#admin/.test(location.hash) && ME.admin) return showAdmin();
+    if(/^#att/.test(location.hash)) return member() ? showAttendance() : showGate();
     if(h.st) return showStandings(h.y, h.b);
     if(h.m && h.s) return showSheet(h.m, h.s);
     if(h.m && h.r != null) return showResults(h.m, h.r);
