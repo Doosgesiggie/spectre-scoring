@@ -792,7 +792,7 @@ function spQRPdfPlace(doc, tok, ends, R, BOT, cap){ if(!spTokOk(tok)) return 0; 
   if(ends[n] != null && ends[n] < lim) p = n; else if(ends[1] != null && ends[1] < lim) p = 1;
   if(!p) return 0; doc.setPage(p); var ok = spQRPdf(doc, tok, R - 58, BOT - 72, 56); if(ok) cap(p); doc.setPage(n); return ok ? p : 0; }
 
-/* ===================== Shooter attendance record (one page) =====================
+/* ===================== Shooter attendance record (one page, one year) =====================
    Built ONLY from publisher-written results copies (verify/{rt} docs, kind "results") and the admin-linked users/{uid}.shooterName.
    The public attendance verify doc stores just { kind, name, rts[] }: verify.html re-reads each public results copy and re-derives
    every row, so a shooter cannot type in placings. No IDs, cell numbers or e-mail addresses are read, stored or printed. */
@@ -814,7 +814,8 @@ function atRow(name, d){
   return { date: mt.date || "", match: mt.name || "", venue: mt.venue || "", div: div.join(" · ") || "–", place: place,
     pts: pts + (/^[\d.]+$/.test(pts) ? (/total/i.test(o.h[pi]) ? " s" : " pts") : ""), basis: o.t || "" };
 }
-function atRows(name, docs){ return docs.map(function(d){ return atRow(name, d); }).filter(Boolean).sort(function(a, b){ return a.date < b.date ? -1 : 1; }); }
+/* year (optional, "2026"): one attendance record covers one calendar year only */
+function atRows(name, docs, year){ return docs.map(function(d){ return atRow(name, d); }).filter(function(r){ return r && (!year || r.date.slice(0, 4) === String(year)); }).sort(function(a, b){ return a.date < b.date ? -1 : 1; }); }
 var AT_CSS = '.atp{font-family:Barlow,"Segoe UI",Arial,sans-serif;color:#111;width:186mm;margin:0 auto}' +
   '.athd{display:flex;align-items:center;gap:6mm;background:#14284b;color:#fff;border-bottom:1.2mm solid #c59a1e;padding:4mm 5mm}.athd .splogo{height:15mm;width:44mm}' +
   '.athd h1{margin:0;font:800 17pt "Barlow Condensed",Arial Narrow,sans-serif;text-transform:uppercase;letter-spacing:.02em}.athd p{margin:1mm 0 0;font-size:9pt;color:#dfe5ef}' +
@@ -824,15 +825,17 @@ var AT_CSS = '.atp{font-family:Barlow,"Segoe UI",Arial,sans-serif;color:#111;wid
 function atTable(rows){ return '<table class="att"><thead><tr><th>Date</th><th>Match</th><th>Division</th><th>Placing</th><th>Points</th></tr></thead><tbody>' +
   rows.map(function(r){ return '<tr><td>' + shEsc(r.date) + '</td><td>' + shEsc(r.match) + (r.venue ? '<br><small>' + shEsc(r.venue) + '</small>' : "") + '</td><td>' + shEsc(r.div) + '</td><td>' + shEsc(r.place) + '</td><td>' + shEsc(r.pts) + '</td></tr>'; }).join("") + '</tbody></table>'; }
 /* printable page; tok = the shooter's published attendance token, or "" when they chose not to publish (no QR then) */
-function atPageHTML(name, rows, tok, made){
-  var yrs = rows.map(function(r){ return r.date.slice(0, 4); }).filter(function(v, i, a){ return a.indexOf(v) === i; }).join(", ");
-  return '<div class="atp"><div class="athd">' + spLogoSVG("navybar") + '<div><h1>Shooter attendance record</h1><p>Spectre Tactical Shooting · club shoots ' + shEsc(yrs) + '</p></div></div>' +
+/* years this shooter attended, newest first */
+function atYears(name, docs){ var o = {}; docs.forEach(function(d){ var r = atRow(name, d); if(r && /^\d{4}/.test(r.date)) o[r.date.slice(0, 4)] = 1; }); return Object.keys(o).sort().reverse(); }
+function atPageHTML(name, rows, tok, made, year){
+  var yrs = year ? String(year) : rows.map(function(r){ return r.date.slice(0, 4); }).filter(function(v, i, a){ return a.indexOf(v) === i; }).join(", ");
+  return '<div class="atp"><div class="athd">' + spLogoSVG("navybar") + '<div><h1>Attendance record ' + shEsc(yrs) + '</h1><p>Spectre Tactical Shooting · club shoots ' + shEsc(yrs) + '</p></div></div>' +
     '<div class="atnm">' + shEsc(name) + '</div><p class="atsub">' + rows.length + ' shoot' + (rows.length === 1 ? "" : "s") + ' attended · from the published Spectre results archive · generated ' + shEsc(made) + '</p>' + atTable(rows) +
     '<div class="atft">' + (tok ? spQRSVG(spVerifyURL(tok)) + '<div><b>Scan to verify.</b> The QR opens a public page that rebuilds this list from the published results, so it cannot be edited by hand.<br>' + shEsc(spVerifyURL(tok)) + '</div>'
       : '<div>Not published: this copy has no verify QR.</div>') + '</div></div>';
 }
 /* the public verify doc payload (the shooter's choice to publish): references only, no rows, no personal details */
-function atVerifyDoc(name, rts, made){ return { v: 1, kind: "attendance", name: name, rts: rts, publishedAt: made }; }
+function atVerifyDoc(name, rts, made, year){ return { v: 2, kind: "attendance", name: name, year: String(year), rts: rts, publishedAt: made }; }
 
 </script>
 <script>
@@ -1346,21 +1349,37 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
       var rts = ms.filter(function(m){ return m && m.rt; }).map(function(m){ return m.rt; });
       return Promise.all(rts.map(function(t){ return fetch(base + t + key, { cache: "no-store" }).then(function(r){ return r.ok ? r.json() : null; }).then(function(x){ var g = x && x.fields || {};
         if(!g.data || !g.data.stringValue || (g.hidden && g.hidden.booleanValue)) return null; var y = JSON.parse(g.data.stringValue); return y.kind === "results" ? { rt: t, d: y } : null; }).catch(function(){ return null; }); })); }).then(function(a){ return a.filter(Boolean); }); }
+  /* one record per calendar year: users/{uid}.attToks = { "2026": token, ... } (tokens are only ever added; firestore.rules).
+     Migration of the first release (one all-years token, users/{uid}.attTok): that token becomes the token of the LATEST year attended,
+     so a QR already printed keeps working and, once re-published, shows that year only (verify.html already shows a year-less doc as its latest year). */
+  var ATT_Y = "";
+  function attToks(){ var o = {}, t = (ME.prof && ME.prof.attToks) || {}; Object.keys(t).forEach(function(k){ o[k] = t[k]; }); return o; }
+  function attTokFor(y, ys){ var t = attToks(), lg = ME.prof && ME.prof.attTok; if(t[y]) return { tok: t[y], saved: true };
+    var used = Object.keys(t).some(function(k){ return t[k] === lg; });
+    return lg && !used && y === ys[0] ? { tok: lg, saved: false, legacy: true } : { tok: "", saved: false }; }
   function showAttendance(){
     var nm = ME.prof && ME.prof.shooterName;
     if(!nm){ app.innerHTML = '<div class="card"><h2 style="margin:0">My attendance record</h2><p>Your account is not linked to a name in the results yet. Ask an admin to link it (they match your account to the name used on the results sheets).</p></div>'; return; }
     app.innerHTML = '<div class="card"><p>Building your record…</p></div>';
     attDocs().then(function(all){
-      var mine = all.filter(function(x){ return atRow(nm, x.d); }), rows = atRows(nm, mine.map(function(x){ return x.d; })), tok = ME.prof.attTok || "", made = new Date().toISOString().slice(0, 10);
-      app.innerHTML = '<div class="card noprint"><h2 style="margin:0">My attendance record</h2><p class="small muted">' + rows.length + ' shoots found for <b>' + e(nm) + '</b>. Publishing is your choice: it creates a public page (the QR) that lists only your name and these shoots.</p>' +
-        '<button class="btn" id="attPrint">Print / save PDF</button> <button class="btn" id="attPub">' + (tok ? "Update published copy" : "Publish with a verify QR") + '</button>' + (tok ? ' <button class="btn" id="attUnpub">Withdraw</button>' : "") + '</div>' +
-        '<style>' + AT_CSS + '</style><div class="paper">' + atPageHTML(nm, rows, tok, made) + '</div>';
+      var ys = atYears(nm, all.map(function(x){ return x.d; }));
+      if(!ys.length){ app.innerHTML = '<div class="card"><h2 style="margin:0">My attendance record</h2><p>No published results list <b>' + e(nm) + '</b> yet.</p></div>'; return; }
+      var y = ys.indexOf(ATT_Y) >= 0 ? ATT_Y : ys[0]; ATT_Y = y;
+      var mine = all.filter(function(x){ var r = atRow(nm, x.d); return r && r.date.slice(0, 4) === y; }), rows = atRows(nm, mine.map(function(x){ return x.d; }), y);
+      var tk = attTokFor(y, ys), pubd = tk.saved || tk.legacy, made = new Date().toISOString().slice(0, 10);
+      app.innerHTML = '<div class="card noprint"><h2 style="margin:0">My attendance record</h2><p><label for="attY"><b>Year</b></label> <select id="attY">' + ys.map(function(v){ return '<option' + (v === y ? " selected" : "") + '>' + e(v) + '</option>'; }).join("") + '</select></p>' +
+        '<p class="small muted">' + rows.length + ' shoot' + (rows.length === 1 ? "" : "s") + ' in ' + e(y) + ' for <b>' + e(nm) + '</b>. Each year is a separate record with its own QR. Publishing is your choice: it creates a public page (the QR) that lists only your name, the year and these shoots.</p>' +
+        '<button class="btn" id="attPrint">Print / save PDF</button> <button class="btn" id="attPub">' + (pubd ? "Update published " + e(y) + " record" : "Publish " + e(y) + " with a verify QR") + '</button>' + (pubd ? ' <button class="btn" id="attUnpub">Withdraw ' + e(y) + '</button>' : "") + '</div>' +
+        '<style>' + AT_CSS + '</style><div class="paper">' + atPageHTML(nm, rows, pubd ? tk.tok : "", made, y) + '</div>';
+      document.getElementById("attY").onchange = function(){ ATT_Y = this.value; showAttendance(); };
       document.getElementById("attPrint").onclick = function(){ window.print(); };
-      function put(hidden){ var t = tok || spNewToken(), doc = atVerifyDoc(nm, mine.map(function(x){ return x.rt; }), made);
-        return sdk().then(function(){ return F.setDoc(F.doc(db, "verify", t), { v: 1, kind: "attendance", uid: ME.user.uid, hidden: hidden, at: new Date().toISOString(), data: hidden ? "" : JSON.stringify(doc) }); })
-          .then(function(){ return tok ? null : F.updateDoc(F.doc(db, "users", ME.user.uid), { attTok: t }); }).then(function(){ if(!tok) ME.prof.attTok = t; showAttendance(); }, function(er){ alert("Could not publish: " + (er && er.message || er)); }); }
-      document.getElementById("attPub").onclick = function(){ if(confirm("Publish a public verify page with your name and the shoots listed?")) put(false); };
-      var u = document.getElementById("attUnpub"); if(u) u.onclick = function(){ put(true); };
+      function put(hidden){ var t = tk.tok || spNewToken(), doc = atVerifyDoc(nm, mine.map(function(x){ return x.rt; }), made, y), toks = attToks(); toks[y] = t;
+        /* the token is saved on the profile FIRST (the rules only accept a verify doc under the profile's token for that year) */
+        return sdk().then(function(){ return tk.saved ? null : F.updateDoc(F.doc(db, "users", ME.user.uid), { attToks: toks }).then(function(){ ME.prof.attToks = toks; }); })
+          .then(function(){ return F.setDoc(F.doc(db, "verify", t), { v: 2, kind: "attendance", uid: ME.user.uid, year: y, hidden: hidden, at: new Date().toISOString(), data: hidden ? "" : JSON.stringify(doc) }); })
+          .then(showAttendance, function(er){ alert("Could not save: " + (er && er.message || er)); }); }
+      document.getElementById("attPub").onclick = function(){ if(confirm("Publish a public verify page with your name and your " + y + " shoots?")) put(false); };
+      var u = document.getElementById("attUnpub"); if(u) u.onclick = function(){ if(confirm("Withdraw your published " + y + " record? Its QR will show it as withdrawn.")) put(true); };
     }, fail); }
   function route(){ var h = hash(); window.scrollTo(0, 0);
     var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; var nr = document.getElementById("navRes"); nr.className = rules ? "" : "on"; navY();
