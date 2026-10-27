@@ -73,6 +73,7 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 .anav{display:flex;gap:4px;background:#0e1d38;padding:0 12px}
 .anav a{color:#fff;text-decoration:none;padding:10px 16px;font-weight:700;border-bottom:3px solid transparent}
 .anav a.on{border-bottom-color:#d6a92a}
+#navUser{margin-left:auto;display:flex}.gate{max-width:440px;margin:0 auto}.gate input{width:100%;box-sizing:border-box;margin:2px 0 10px}table.mem{width:100%;border-collapse:collapse;font-size:14px}table.mem td,table.mem th{border-bottom:1px solid #ddd;padding:6px 4px;text-align:left}
 .mnote{margin-top:6px;padding:6px 8px;background:#fff8e1;border:1px solid #e8d48a;border-radius:6px;font-size:.9em;white-space:pre-wrap}
 .anotes{font-size:.9em;padding-left:22px}
 .rules h2{margin:0 0 4px}.rules h3{margin:16px 0 6px;color:var(--navy);font-size:1.05em}
@@ -121,7 +122,7 @@ ul.hits{list-style:none;margin:8px 0 0;padding:0}ul.hits li{border-top:1px solid
 </head>
 <body>
 <header><h1>Spectre Tactical Shooting – score sheet archive</h1><div class="sub">Published match results. Find your name to view or download your score sheet.</div></header>
-<nav class="anav noprint"><a href="#" id="navRes">Results</a><a href="#rules" id="navRules">Rules</a></nav>
+<nav class="anav noprint"><a href="#" id="navRes">Results</a><a href="#rules" id="navRules">Rules</a><span id="navUser"></span></nav>
 <main id="app"><div class="card">Loading…</div></main>
 <template id="rulesTpl"><div class="card rules">
 <h2>Club match rules</h2>
@@ -861,13 +862,72 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
 (function(){
   var RULES_HTML = document.getElementById("rulesTpl").innerHTML;
   var F = null, db = null, CUR = null, app = document.getElementById("app"), e = shEsc;
+  /* ---------- members-only: Firebase Auth e-mail/password + admin approval (users/{uid}, admins/{uid}) ---------- */
+  var AU = null, auth = null, ME = { ready: false, user: null, prof: null, admin: false }, GATE = { view: "in", msg: "", busy: false };
   function sdk(){
     if(db) return Promise.resolve();
     var cfg = window.SS_FIREBASE_TEST || window.SS_FIREBASE_CONFIG, base = window.SS_FIREBASE_SDK;
-    return Promise.all([import(base + "firebase-app.js"), import(base + "firebase-firestore.js")]).then(function(m){
-      var a = m[0].initializeApp(cfg, "archive"); F = m[1]; db = F.getFirestore(a);
-      if(cfg.emulator) F.connectFirestoreEmulator(db, cfg.emulator, 8085);
+    return Promise.all([import(base + "firebase-app.js"), import(base + "firebase-firestore.js"), import(base + "firebase-auth.js")]).then(function(m){
+      var a = m[0].initializeApp(cfg, "archive"); F = m[1]; db = F.getFirestore(a); AU = m[2]; auth = AU.getAuth(a);   /* memory cache only: no archive data is kept on the device */
+      if(cfg.emulator){ F.connectFirestoreEmulator(db, cfg.emulator, 8085); AU.connectAuthEmulator(auth, "http://" + cfg.emulator + ":9099", { disableWarnings: true }); }
     });
+  }
+  function member(){ return !!(window.SS_ARCHIVE_FAKE || (ME.user && (ME.admin || (ME.prof && ME.prof.approved === true)))); }
+  function loadMe(u){
+    ME.user = u && !u.isAnonymous ? u : null; ME.prof = null; ME.admin = false; LIST = null; MDATA = {};
+    if(!ME.user) return Promise.resolve();
+    var uid = u.uid;
+    return Promise.all([F.getDoc(F.doc(db, "users", uid)).catch(function(){ return null; }), F.getDoc(F.doc(db, "admins", uid)).then(function(d){ return d.exists(); }, function(){ return false; })]).then(function(r){
+      ME.admin = r[1];
+      if(r[0] && r[0].exists()){ ME.prof = r[0].data(); return; }
+      /* first sign-in after registering (or the profile write failed): create the unapproved profile – e-mail, name, status only */
+      if(!GATE.first || !GATE.last) return;   /* names unknown on this device: shown as "profile could not be created" */
+      var p = { email: u.email, first: GATE.first, last: GATE.last, approved: false, createdAt: new Date().toISOString() };
+      return F.setDoc(F.doc(db, "users", uid), p).then(function(){ ME.prof = p; }, function(){ ME.prof = null; });
+    });
+  }
+  function gateStart(){
+    if(window.SS_ARCHIVE_FAKE){ ME.ready = true; route(); return; }
+    sdk().then(function(){ AU.onAuthStateChanged(auth, function(u){ if(ME.ready && !u && !ME.user) return;   /* still signed out: do not wipe a half-filled form */ ME.ready = false; loadMe(u).then(function(){ ME.ready = true; userBar(); route(); }); }); }).catch(function(er){ ME.ready = true; fail(er); });
+  }
+  function userBar(){ var n = document.getElementById("navUser"); if(!n) return;
+    n.innerHTML = ME.user ? (ME.admin ? '<a href="#admin" id="navAdmin">Members</a>' : "") + '<a href="#" id="navOut">Sign out</a>' : "";
+    var o = document.getElementById("navOut"); if(o) o.onclick = function(ev){ ev.preventDefault(); AU.signOut(auth).then(function(){ LIST = null; MDATA = {}; GATE.view = "in"; GATE.msg = "You are signed out."; go(""); }); }; }
+  function authErr(er){ var c = String(er && er.code || ""); return /invalid-credential|wrong-password|user-not-found|invalid-email/.test(c) ? "That e-mail and password do not match an account." : /email-already-in-use/.test(c) ? "There is already an account with that e-mail – sign in, or reset the password." : /weak-password/.test(c) ? "Use a password of at least 8 characters." : /too-many-requests/.test(c) ? "Too many tries – wait a few minutes." : /operation-not-allowed/.test(c) ? "E-mail sign-in is not switched on yet (Firebase console)." : (er && er.message || String(er)); }
+  function showGate(){
+    var v = GATE.view, m = GATE.msg ? '<div class="msg small" id="gMsg">' + e(GATE.msg) + '</div>' : "";
+    var intro = '<p class="small muted">The Spectre Tactical results archive is for club members. Register once with your e-mail; the club admin approves new accounts. We only keep your first name, surname, e-mail and whether you are approved – never ID or cell numbers.</p>';
+    if(v === "reg") app.innerHTML = '<div class="card gate"><h3>Register</h3>' + intro + m + '<form id="gForm"><label for="gFirst"><b>First name</b></label><input id="gFirst" autocomplete="given-name" required maxlength="60"><label for="gLast"><b>Surname</b></label><input id="gLast" autocomplete="family-name" required maxlength="60"><label for="gEmail"><b>E-mail</b></label><input id="gEmail" type="email" autocomplete="email" required><label for="gPw"><b>Password</b> (8+ characters)</label><input id="gPw" type="password" autocomplete="new-password" required minlength="8"><p><button class="primary" id="gGo">Register</button></p></form><p class="small"><a href="#" id="gIn">I already have an account</a></p></div>';
+    else if(v === "reset") app.innerHTML = '<div class="card gate"><h3>Reset password</h3>' + m + '<form id="gForm"><label for="gEmail"><b>E-mail</b></label><input id="gEmail" type="email" autocomplete="email" required><p><button class="primary" id="gGo">Send reset e-mail</button></p></form><p class="small"><a href="#" id="gIn">Back to sign in</a></p></div>';
+    else app.innerHTML = '<div class="card gate"><h3>Sign in</h3>' + intro + m + '<form id="gForm"><label for="gEmail"><b>E-mail</b></label><input id="gEmail" type="email" autocomplete="email" required><label for="gPw"><b>Password</b></label><input id="gPw" type="password" autocomplete="current-password" required><p><button class="primary" id="gGo">Sign in</button></p></form><p class="small"><a href="#" id="gReg">Register</a> &middot; <a href="#" id="gReset">Forgot password?</a></p></div>';
+    function sw(id, to){ var x = document.getElementById(id); if(x) x.onclick = function(ev){ ev.preventDefault(); GATE.view = to; GATE.msg = ""; showGate(); }; }
+    sw("gIn", "in"); sw("gReg", "reg"); sw("gReset", "reset");
+    document.getElementById("gForm").onsubmit = function(ev){ ev.preventDefault(); if(GATE.busy) return;
+      var em = document.getElementById("gEmail").value.trim(), pw = (document.getElementById("gPw") || {}).value, p;
+      GATE.busy = true; document.getElementById("gGo").disabled = true;
+      if(v === "reg"){ GATE.first = document.getElementById("gFirst").value.trim().slice(0, 60); GATE.last = document.getElementById("gLast").value.trim().slice(0, 60);
+        p = AU.createUserWithEmailAndPassword(auth, em, pw).then(function(c){ return loadMe(c.user).then(function(){ ME.ready = true; userBar(); route(); }); }); }
+      else if(v === "reset") p = AU.sendPasswordResetEmail(auth, em).then(function(){ GATE.view = "in"; GATE.msg = "If that e-mail has an account, a reset link is on its way. Check your spam folder too."; showGate(); });
+      else p = AU.signInWithEmailAndPassword(auth, em, pw);
+      p.catch(function(er){ GATE.msg = authErr(er); showGate(); }).then(function(){ GATE.busy = false; var b = document.getElementById("gGo"); if(b) b.disabled = false; });
+    };
+  }
+  function showPending(){
+    var p = ME.prof;
+    app.innerHTML = '<div class="card gate"><h3>Waiting for approval</h3><p>Signed in as <b>' + e(ME.user.email) + '</b>' + (p ? ' (' + e(p.first + " " + p.last) + ')' : "") + '.</p><p class="small muted">' + (p ? "The club admin still has to approve this account" + (p.approvedAt ? " (access was removed on " + e(String(p.approvedAt).slice(0, 10)) + ")" : "") + ". Once approved, reload this page." : "Your member profile could not be created – reload, or ask the club admin.") + '</p><p><button type="button" id="gReload">Check again</button></p></div>';
+    document.getElementById("gReload").onclick = function(){ ME.ready = false; loadMe(ME.user).then(function(){ ME.ready = true; userBar(); route(); }); };
+  }
+  function showAdmin(){
+    app.innerHTML = '<div class="card">Loading members…</div>';
+    F.getDocs(F.collection(db, "users")).then(function(q){
+      var us = q.docs.map(function(d){ var x = d.data(); x.uid = d.id; return x; }).sort(function(a, b){ return (a.approved === b.approved ? 0 : a.approved ? 1 : -1) || (String(a.last) + " " + a.first).localeCompare(String(b.last) + " " + b.first); });
+      var pend = us.filter(function(u){ return !u.approved; }).length;
+      app.innerHTML = '<div class="card"><h3>Archive members</h3><p class="small muted">' + us.length + ' account' + (us.length === 1 ? "" : "s") + ', ' + pend + ' waiting. Approve only people you know. Revoking takes effect on their next page load.</p><table class="mem" id="memTbl"><tr><th>Full name</th><th>E-mail</th><th>Registered</th><th>Status</th><th></th></tr>' + us.map(function(u){
+        return '<tr data-uid="' + e(u.uid) + '"><td>' + e(u.first + " " + u.last) + '</td><td>' + e(u.email) + '</td><td>' + e(String(u.createdAt || "").slice(0, 10)) + '</td><td>' + (u.approved ? '<span class="chip ok">Approved</span>' : '<span class="chip warn">Waiting</span>') + '</td><td>' + (u.uid === ME.user.uid ? "" : '<button type="button" class="slim mem-b" data-a="' + (u.approved ? 0 : 1) + '">' + (u.approved ? "Revoke" : "Approve") + '</button>') + '</td></tr>'; }).join("") + '</table></div>';
+      Array.prototype.forEach.call(document.querySelectorAll(".mem-b"), function(b){ b.onclick = function(){
+        var uid = b.closest("tr").getAttribute("data-uid"), ok = b.getAttribute("data-a") === "1"; b.disabled = true;
+        F.updateDoc(F.doc(db, "users", uid), { approved: ok, approvedBy: String(ME.prof ? ME.prof.first + " " + ME.prof.last : ME.user.email).slice(0, 79), approvedAt: new Date().toISOString() }).then(showAdmin, function(er){ alert("Could not save: " + (er && er.message || er)); b.disabled = false; }); }; });
+    }).catch(fail);
   }
   function hash(){ var o = {}; location.hash.replace(/^#/, "").split("&").forEach(function(p){ var kv = p.split("="); if(kv[0]) o[kv[0]] = decodeURIComponent(kv[1] || ""); }); return o; }
   function go(h){ location.hash = h; }
@@ -1135,12 +1195,16 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
   function route(){ var h = hash(); window.scrollTo(0, 0);
     var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; var nr = document.getElementById("navRes"); nr.className = rules ? "" : "on"; navY();
     if(rules){ app.innerHTML = RULES_HTML; return; }
+    if(!ME.ready){ app.innerHTML = '<div class="card">Loading…</div>'; return; }
+    if(!window.SS_ARCHIVE_FAKE && !ME.user) return showGate();
+    if(!member()) return showPending();
+    if(/^#admin/.test(location.hash) && ME.admin) return showAdmin();
     if(h.st) return showStandings(h.y, h.b);
     if(h.m && h.s) return showSheet(h.m, h.s);
     if(h.m && h.r != null) return showResults(h.m, h.r);
     if(h.m) return showMatch(h.m, h.q);
     showList(h.y, h.q); }
-  window.addEventListener("hashchange", route); route();
+  window.addEventListener("hashchange", route); route(); gateStart();
 })();
 </script>
 </body>
