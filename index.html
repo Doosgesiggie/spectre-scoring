@@ -176,6 +176,8 @@ details > summary{cursor:pointer;font-weight:700;min-height:48px;display:flex;al
 .toast{width:max-content;max-width:calc(100vw - 24px)}
 @media (max-width:480px){ .brand .ver{display:none} .syncchip{max-width:34vw;overflow:hidden;text-overflow:ellipsis} }
 .badge{display:inline-block;font-size:.72em;font-weight:700;padding:1px 6px;border-radius:6px;vertical-align:middle} .badge.bad{background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad)}
+
+.shline{display:flex;gap:6px;align-items:stretch;margin:0 0 8px}.shline .shrow{flex:1;margin:0}.shro{display:flex;align-items:center;gap:4px;margin:0;padding:0 10px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -2216,7 +2218,9 @@ function renderShooters(){
   squadSorted(S.shooters).forEach(function(sh){
     if((sh.squad || "") !== squad){ squad = sh.squad || ""; h += '<h3 style="margin-top:12px">' + (squad ? "Squad " + esc(squad) : "No squad") + '</h3>'; }
     var n = Object.keys(S.scores).filter(function(k){ return S.scores[k].shooter === sh.id; }).length;
+    var tick = !SEL && S.role !== "ro"; if(tick) h += '<div class="shline">';
     h += '<button type="button" class="shrow' + (SEL && SEL.ids[sh.id] ? " done" : "") + '" ' + (SEL ? 'data-pick' : 'data-edsh') + '="' + sh.id + '">' + (SEL ? '<span style="font-size:1.4em">' + (SEL.ids[sh.id] ? "☑" : "☐") + '</span>' : "") + '<span class="nm"><b>' + (sh.no ? "#" + sh.no + " " : "") + esc(shName(sh)) + '</b><span class="small muted">' + esc(divsText(sh)) + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.member ? " · " + esc(sh.member) : "") + (sh.visitor ? ' <span class="chip">Visitor</span>' : "") + '</span></span><span class="small">' + n + ' stage' + (n === 1 ? "" : "s") + '</span></button>';
+    if(tick) h += roTickHTML(sh.id) + '</div>';
   });
   if(S.role !== "ro" && S.shooters.length) h += '<div style="margin-top:28px;border-top:1px solid #8884;padding-top:14px"><button type="button" class="danger wide" data-act="clearsh">Clear shooters…</button><p class="small muted">Deletes every shooter in this match (and their scores).</p></div>';
   view().innerHTML = h;
@@ -2808,10 +2812,12 @@ function regInner(){
     '<details style="margin-top:10px"' + (REG.openList ? " open" : "") + ' id="regListD"><summary>Entries (' + REGRT.entries.length + ')</summary><ul class="list-plain small">' +
     regEntriesSorted().map(function(e){ var gone = e.status !== "active";
       return '<li class="row" style="' + (gone ? "opacity:.55" : "") + '"><span class="grow"><b>' + esc(e.first + " " + e.last) + '</b>' + (gone ? " · " + esc(e.status) : "") + '<br>' + esc([r.squads[e.squad] ? r.squads[e.squad].n : e.squad, regDivsText(e), e.cls, e.cat, e.visitor ? "Visitor" : e.member ? "SWPC " + e.member : ""].filter(Boolean).join(" · ")) + (e.email ? '<br><span class="muted">' + esc(e.email) + '</span>' : "") + '</span>' +
-        (gone ? (e.status === "removed" ? '<button type="button" class="slim" data-regrestore="' + e.tok + '">Restore</button>' : "") : '<label class="agree' + (e.paid ? " on" : "") + '" style="margin:0 6px 0 0"><input type="checkbox" data-regpaid="' + e.tok + '"' + (e.paid ? " checked" : "") + '> Paid</label><button type="button" class="slim danger" data-regdel="' + e.tok + '">Remove</button>') + '</li>'; }).join("") + '</ul></details>' +
+        (gone ? (e.status === "removed" ? '<button type="button" class="slim" data-regrestore="' + e.tok + '">Restore</button>' : "") : regRoTick(e) + '<label class="agree' + (e.paid ? " on" : "") + '" style="margin:0 6px 0 0"><input type="checkbox" data-regpaid="' + e.tok + '"' + (e.paid ? " checked" : "") + '> Paid</label><button type="button" class="slim danger" data-regdel="' + e.tok + '">Remove</button>') + '</li>'; }).join("") + '</ul></details>' +
     '<button type="button" class="wide" style="margin-top:10px" id="regForgetB">Forget on this phone</button><p class="small muted">Forgetting only removes it from this phone; the registration stays online. Keep the code ' + esc(REG.code) + ' to reopen it here.</p>';
   return h;
 }
+/* RO tick on a registration entry – only once that entry is a shooter in this match (Import as shooters) */
+function regRoTick(e){ var sh = S.shooters.filter(function(x){ return sameShooter(x, e); })[0]; return sh ? roTickHTML(sh.id).replace('class="agree shro', 'style="margin:0 6px 0 0" class="agree shro') : ""; }
 function regCard(){ return S.role === "ro" ? "" : '<div class="card"><h3>Shooter registration</h3><div id="regBox">' + regInner() + '</div></div>'; }
 function regPaint(){ var b = document.getElementById("regBox"); if(b){ var open = document.getElementById("regListD"); if(open) REG.openList = open.open; b.innerHTML = regInner(); regDrawQR(); } }
 function regDrawQR(){ var q = document.getElementById("regQR"); if(q && REG.code){ try{ q.innerHTML = qrSVG(regLink(REG.code)); }catch(e){ q.textContent = ""; } } }
@@ -3058,11 +3064,34 @@ function officerName(){ return String(S.device.officer || S.device.name || "").t
 function scoredByOf(sc){ sc = sc || {}; return { name: sc.by || sc.device || "", device: sc.device || "", at: sc.at || "", ro: sc.byRo || "" }; }
 function scoredByText(sc){ var b = scoredByOf(sc); return b.name ? b.name + (b.device && b.device !== b.name ? " (" + b.device + ")" : "") : ""; }
 function roNewId(){ var s; do { s = ""; for(var i = 0; i < 4; i++) s += RO_ID_CHARS[Math.floor(Math.random() * RO_ID_CHARS.length)]; } while((S.ros || []).some(function(r){ return r.id === s; })); return s; }
+/* RO tick-box on a shooter: the role is linked by r.sh (shooter id) and always carries that shooter's current name */
+function roName(r){ var sh = r && r.sh ? shooterById(r.sh) : null; return sh ? shName(sh).trim().slice(0, 60) : (r ? r.name : ""); }
+function roOfShooter(shId){ return (S.ros || []).filter(function(r){ return r.sh === shId; })[0] || null; }
+function roScoredCount(r){ return Object.keys(S.scores).filter(function(k){ return S.scores[k].byRo === r.id; }).length; }
+/* tick → create (or link an existing same-name RO) and show its QR/code; returns the role */
+function roTickShooter(shId){
+  var sh = shooterById(shId); if(!sh) return null; var have = roOfShooter(shId); if(have) return have;
+  var nm = shName(sh).trim().slice(0, 60), same = (S.ros || []).filter(function(r){ return !r.sh && r.name.toLowerCase() === nm.toLowerCase(); })[0];
+  if(same){ same.sh = shId; S.audit.push({ at: nowISO(), device: S.device.name, key: "ro", note: "RO " + same.name + " linked to shooter" }); saveState(); return same; }
+  return roAdd(nm, shId);
+}
+/* untick → remove (asks first, in-app, if that RO already scored) – resolves true when removed */
+function roUntickShooter(shId){
+  var r = roOfShooter(shId); if(!r) return Promise.resolve(true); var n = roScoredCount(r);
+  var go = n ? ask(roName(r) + " has already scored " + n + " score" + (n === 1 ? "" : "s") + " as RO. Remove the RO role? His phone stops scoring; the saved scores stay.", { ok: "Remove RO", okClass: "danger", cancel: "Keep RO" }) : Promise.resolve(true);
+  return go.then(function(ok){ if(ok){ roRemove(r.id); toast("RO " + roName(r) + " removed"); } return !!ok; });
+}
+function roTickChange(inp){
+  var id = inp.dataset.rotick;
+  if(inp.checked){ try{ var r = roTickShooter(id); if(r){ toast("RO " + roName(r) + " added – tick his stages under Match → Range Officers"); render(); roQRDialog(r.id, true); } }catch(er){ inp.checked = false; alertMsg(er.message); } }
+  else roUntickShooter(id).then(function(){ render(); });
+}
+function roTickHTML(shId){ var r = roOfShooter(shId); return '<label class="agree shro' + (r ? " on" : "") + '" title="Range Officer"><input type="checkbox" data-rotick="' + esc(shId) + '"' + (r ? " checked" : "") + '> RO</label>'; }
 function roById(id){ return (S.ros || []).filter(function(r){ return r.id === id; })[0] || null; }
 /* room roles map (what Firestore sees): { ID: { n: name, s: [stageIds] } } */
-function rolesMap(){ var m = {}; (S.ros || []).forEach(function(r){ if(r.name) m[r.id] = { n: String(r.name).slice(0, 60), s: (r.stages || []).filter(function(id){ return !!stageById(id); }).slice(0, 40) }; }); return m; }
-function roAdd(name){ name = String(name || "").trim().slice(0, 60); if(!name) return null; if((S.ros || []).some(function(r){ return r.name.toLowerCase() === name.toLowerCase(); })) throw new Error("There is already an RO called " + name + ".");
-  if((S.ros || []).length >= 30) throw new Error("Up to 30 ROs."); var r = { id: roNewId(), name: name, stages: [] }; S.ros = (S.ros || []).concat([r]);
+function rolesMap(){ var m = {}; (S.ros || []).forEach(function(r){ if(r.name) m[r.id] = { n: String(roName(r)).slice(0, 60), s: (r.stages || []).filter(function(id){ return !!stageById(id); }).slice(0, 40) }; }); return m; }
+function roAdd(name, shId){ name = String(name || "").trim().slice(0, 60); if(!name) return null; if((S.ros || []).some(function(r){ return r.name.toLowerCase() === name.toLowerCase(); })) throw new Error("There is already an RO called " + name + ".");
+  if((S.ros || []).length >= 30) throw new Error("Up to 30 ROs."); var r = { id: roNewId(), name: name, stages: [] }; if(shId) r.sh = shId; S.ros = (S.ros || []).concat([r]);
   S.audit.push({ at: nowISO(), device: S.device.name, key: "ro", note: "RO added: " + name }); saveState(); return r; }
 function roSetStages(id, stages){ var r = roById(id); if(!r) return; r.stages = stages.slice(); S.audit.push({ at: nowISO(), device: S.device.name, key: "ro", note: "RO " + r.name + " → " + (r.stages.length ? r.stages.map(function(s){ var st = stageById(s); return st ? "stage " + st.no : s; }).join(", ") : "no stages") }); saveState(); }
 function roRemove(id){ var r = roById(id); if(!r) return; S.ros = S.ros.filter(function(x){ return x.id !== id; }); S.audit.push({ at: nowISO(), device: S.device.name, key: "ro", note: "RO removed: " + r.name }); saveState(); }
@@ -3084,7 +3113,7 @@ function rolesCard(){
   var h = '<div class="card" id="rolesCard"><h3>Range Officers &amp; scoring roles</h3><label>Your name (stamps the scores entered on this phone)</label><input id="roMe" value="' + esc(S.device.officer || "") + '" placeholder="e.g. Gideon Joubert">';
   h += '<p class="small muted">Each score is stamped with who scored it (name, phone, time) – no signing needed. Add the ROs and tick their stages. In a live room an RO phone picks its name (or scans its QR) and can then score only those stages; changes here reach the RO phones by themselves.</p>';
   h += ros.length ? ros.map(function(r){ var c = roCode(r.id);
-    return '<div class="rorow" data-roid="' + r.id + '"><div class="row"><b class="grow">' + esc(r.name) + '</b>' + (c ? '<button type="button" class="slim" data-roqr="' + r.id + '">QR</button>' : "") + '<button type="button" class="slim danger" data-rodel="' + r.id + '">Remove</button></div>' +
+    return '<div class="rorow" data-roid="' + r.id + '"><div class="row"><b class="grow">' + esc(roName(r)) + (r.sh ? ' <span class="small muted">(shooter)</span>' : '') + '</b>' + (c ? '<button type="button" class="slim" data-roqr="' + r.id + '">QR</button>' : "") + '<button type="button" class="slim danger" data-rodel="' + r.id + '">Remove</button></div>' +
       '<div class="rostages">' + S.stages.map(function(st){ return '<label class="agree' + (r.stages.indexOf(st.id) >= 0 ? " on" : "") + '"><input type="checkbox" data-ros="' + r.id + '|' + st.id + '"' + (r.stages.indexOf(st.id) >= 0 ? " checked" : "") + '> Stage ' + st.no + '</label>'; }).join("") + '</div>' +
       (c ? '<div class="small">Assignment code: <b class="rocode">' + esc(c) + '</b></div>' : "") + '</div>'; }).join("") : '<p class="small muted">No ROs yet.</p>';
   h += '<div class="row" style="margin-top:8px"><input id="roNew" class="grow" placeholder="RO name" maxlength="60"><button type="button" id="roAdd">Add RO</button></div>';
@@ -3103,9 +3132,13 @@ function rolesBind(){
     if(b.dataset.roqr) roQRDialog(b.dataset.roqr);
   };
 }
-function roQRDialog(id){ var r = roById(id), code = roCode(id); if(!r || !code) return; var o = $("overlay");
-  o.innerHTML = '<h2>' + esc(r.name) + '</h2><p class="small">RO phone: Match → Live sync → Join → Scan QR, or type the assignment code.</p><div class="syncqr" id="roQR"></div><p style="text-align:center;font-size:1.4em"><b>' + esc(code) + '</b></p><button type="button" class="wide" id="roQRClose">Close</button>';
-  o.hidden = false; try{ $("roQR").innerHTML = qrSVG("SSLIVE|" + SYNC.code + "|" + id); }catch(e){ $("roQR").textContent = "Could not draw the QR – type the code."; }
+function roQRDialog(id, fromTick){ var r = roById(id), code = roCode(id); if(!r || (!code && !fromTick)) return; var o = $("overlay");
+  var st = (r.stages || []).map(function(x){ var s2 = stageById(x); return s2 ? "stage " + s2.no : ""; }).filter(Boolean).join(", ");
+  o.innerHTML = '<h2>' + esc(roName(r)) + '</h2><p class="small">Stages: <b>' + esc(st || "none yet") + '</b> – tick them under Match → Range Officers.</p>' +
+    (code ? '<p class="small">His phone: Match → Live sync → Join → Scan QR, or type the assignment code. It then scores as ' + esc(roName(r)) + '.</p><div class="syncqr" id="roQR"></div><p style="text-align:center;font-size:1.4em"><b id="roQRCode">' + esc(code) + '</b></p>'
+      : '<p class="small muted" id="roQRNoRoom">Create a live match room (Match → Live sync) to get his QR and assignment code – then tap QR next to his name under Range Officers.</p>') +
+    '<button type="button" class="wide" id="roQRClose">Close</button>';
+  o.hidden = false; if(code){ try{ $("roQR").innerHTML = qrSVG("SSLIVE|" + SYNC.code + "|" + id); }catch(e){ $("roQR").textContent = "Could not draw the QR – type the code."; } }
   $("roQRClose").onclick = function(){ o.hidden = true; o.innerHTML = ""; };
 }
 /* ===================== per-shooter score sheets (print / PDF, one A4 page per shooter) ===================== */
@@ -3541,6 +3574,7 @@ function onClick(e){
 function boot(){
   loadPrefs(); loadState(); loadUndo();
   document.addEventListener("click", onClick);
+  document.addEventListener("change", function(e){ var t = e.target; if(t && t.dataset && t.dataset.rotick) roTickChange(t); });
   $("devChip").onclick = function(){ setTab("match"); };
   $("fileAny").onchange = function(){ var f = this.files && this.files[0], inp = this; if(!f) return; var rd = new FileReader(); rd.onload = function(){ inp.value = ""; importFileText(String(rd.result || ""), f.name); }; rd.readAsText(f); };
   /* resume an unfinished entry after a reload */
@@ -3551,7 +3585,7 @@ function boot(){
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later", keepInput: true, checks: [{ label: "Large text (easier to read in sunlight)", on: !!PREFS.big, v: "big" }] }).then(function(v){ var bx = document.querySelector('#mExtra [data-i="0"]'); if(bx && !!bx.checked !== !!PREFS.big){ PREFS.big = !!bx.checked; savePrefs(); } if(v && v.trim()){ S.device.name = v.trim(); saveState(); } render(); }); }, 300);
   if("serviceWorker" in navigator && location.protocol !== "file:") setupUpdates();
 }
-window.SSS = { get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, overallViews: overallViews, regEntryDivs: typeof regEntryDivs !== "undefined" ? regEntryDivs : null, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, reg: { get state(){ return REG; }, rt: REGRT, create: regCreate, open: regOpenCode, toShooters: regToShooters, importNow: regImport, set: regOrgSet, update: regUpdate }, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; }, sheets: { data: sheetData }, roles: { add: roAdd, set: roSetStages, remove: roRemove, map: rolesMap, byId: roById, code: roCode, parse: roParseCode, officer: officerName }, archive: { publish: archivePublish, payload: archivePayload, url: archiveURL, progress: archiveProgress, checkPub: archiveCheckPub, rt: ARCHRT }, split: { plan: splitPlan, dialog: splitDialog, move: moveShooters, undo: undoSquads } };
+window.SSS = { roTick: { on: roTickShooter, off: roUntickShooter, of: roOfShooter, name: roName }, get S(){ return S; }, U: U, calcScore: calcScore, stageResults: stageResults, matchResults: matchResults, overallViews: overallViews, regEntryDivs: typeof regEntryDivs !== "undefined" ? regEntryDivs : null, readDesignerFile: readDesignerFile, addStages: addStages, readShootersCSV: readShootersCSV, addShooters: addShooters, newScore: newScore, commitScore: commitScore, undoLast: undoLast, targetSpec: targetSpec, makeStagePack: makeStagePack, makeScoresPack: makeScoresPack, applyStagePack: applyStagePack, mergeScoresPack: mergeScoresPack, resolveConflict: resolveConflict, qrEncodePack: qrEncodePack, qrParse: qrParse, qrJoin: qrJoin, scanFeed: scanFeed, scanReset: scanReset, qrSVG: qrSVG, resultsCSV: resultsCSV, saveState: saveState, clearAll: clearAll, render: render, importFileText: importFileText, makeBackup: makeBackup, restoreBackup: restoreBackup, sigGet: sigGet, matchMethod: matchMethod, stageById: stageById, shooterById: shooterById, skey: skey, reg: { get state(){ return REG; }, rt: REGRT, create: regCreate, open: regOpenCode, toShooters: regToShooters, importNow: regImport, set: regOrgSet, update: regUpdate }, sync: { get state(){ return SYNC; }, publish: syncPublishResults, viewJoin: syncViewJoin, get results(){ return SYNCRT.results; }, snapshot: resultsSnapshot, rt: SYNCRT, create: syncCreate, join: syncJoin, leave: syncLeave, flush: syncFlush, pending: syncPending, onScores: syncOnScores, start: syncStart, label: syncLabel, configured: syncConfigured }, setS: function(x){ S = x; }, sheets: { data: sheetData }, roles: { add: roAdd, set: roSetStages, remove: roRemove, map: rolesMap, byId: roById, code: roCode, parse: roParseCode, officer: officerName }, archive: { publish: archivePublish, payload: archivePayload, url: archiveURL, progress: archiveProgress, checkPub: archiveCheckPub, rt: ARCHRT }, split: { plan: splitPlan, dialog: splitDialog, move: moveShooters, undo: undoSquads } };
 document.addEventListener("DOMContentLoaded", boot);
 
 /* updates: a new version (new sw.js build hash) installs in the background; the user is told and reloads when ready */
