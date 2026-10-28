@@ -243,7 +243,7 @@ function sheetRender(d, sigs, printed){
   h += '<table class="shst"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th>Steel standing</th><th>Proc. / pen.</th><th>No-shoot</th><th>Raw time</th><th>' + (d.neg ? "Penalty time" : "Penalty pts") + '</th><th>Stage score</th><th>Place</th>' + (anySig ? '<th>Shooter e-sig.</th>' : "") + '</tr>';
   (d.rows || []).forEach(function(r){
     var name = '<b>' + e(r.no) + '</b> ' + e(r.title);
-    if(r.none){ h += '<tr><td>' + name + '</td><td colspan="' + (cols - 1) + '" class="c">Not scored' + fnOf(r) + '</td></tr>'; return; }
+    if(r.none){ h += '<tr><td>' + name + '</td><td colspan="' + (cols - 1) + '" class="c">' + (r.cancelled ? 'Cancelled – not counted' : 'Not scored') + fnOf(r) + '</td></tr>'; return; }
     var sg = sigOf(r);
     h += '<tr><td>' + name + '</td>' + ["hz", "pz1", "pz2", "miss", "standing", "pen", "ns", "time", "penT"].map(function(k){ return '<td class="n">' + v(r[k]) + '</td>'; }).join("") +
       '<td class="n"><b>' + v(r.score) + '</b>' + fnOf(r) + '</td><td class="n">' + v(r.place) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
