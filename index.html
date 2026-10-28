@@ -1409,7 +1409,7 @@ function fixState(o){
   return o;
 }
 function renumber(o){ o = o || S; var used = {}; o.stages.forEach(function(st, i){ if(!st.no || used[st.no]) st.no = i + 1; used[st.no] = 1; }); o.stages.sort(function(a, b){ return a.no - b.no; }); }
-function saveState(){ try{ localStorage.setItem(SS_KEY, JSON.stringify(S)); if(typeof syncAfterSave === "function") syncAfterSave(); return true; }catch(e){ alertMsg("Could not save on this phone (storage full?). Export a backup now.\n" + e.message); return false; } }
+function saveState(){ try{ localStorage.setItem(SS_KEY, JSON.stringify(S)); if(typeof syncAfterSave === "function") syncAfterSave(); if(typeof dpAfterSave === "function") dpAfterSave(); return true; }catch(e){ alertMsg("Could not save on this phone (storage full?). Export a backup now.\n" + e.message); return false; } }
 var PREFS = { dark: false, big: false };
 function loadPrefs(){ try{ Object.assign(PREFS, JSON.parse(localStorage.getItem(SS_PREF_KEY) || "{}")); }catch(e){} }
 function savePrefs(){ try{ localStorage.setItem(SS_PREF_KEY, JSON.stringify(PREFS)); }catch(e){} }
@@ -1990,7 +1990,7 @@ function restoreBackup(b){
   if(!b.state || b.state.app !== SS_APP) throw new Error("This backup is damaged.");
   var dev = S.device; S = fixState(clone(b.state));
   if(b.keepDevice !== false) S.device = dev.name ? dev : S.device;
-  UNDO = b.undo || []; saveUndo(); saveState();
+  UNDO = b.undo || []; saveUndo(); saveState(); if(typeof dpMarkBackedUp === "function") dpMarkBackedUp();
   var jobs = Object.keys(b.sigs || {}).map(function(k){ return sigPut(k, b.sigs[k]); });
   return Promise.all(jobs);
 }
@@ -2357,7 +2357,7 @@ function editShooter(id){
 }
 /* ===================== Match tab: stages, phones & packs, backup, settings ===================== */
 function renderMatch(){
-  var ro = S.role === "ro", h = '<h2>Match</h2>';
+  var ro = S.role === "ro", h = '<h2>Match</h2>' + dpBanner();
   h += '<div class="card"><h3>Match</h3>' + (ro ? '<div><b>' + esc(S.match.name) + '</b><br>' + esc(S.match.date) + ' · ' + esc(S.match.venue) + '</div>' :
     '<label>Name</label><input id="mName" value="' + esc(S.match.name) + '"><div class="grid2"><div><label>Date</label><input id="mDate" type="date" value="' + esc(S.match.date) + '"></div><div><label>Match Director</label><input id="mMd" value="' + esc(S.match.md) + '"></div></div><label>Venue</label><input id="mVenue" value="' + esc(S.match.venue) + '"><div class="grid2"><div><label>Scorer(s)</label><input id="mScorer" value="' + esc(S.match.scorer || "") + '" placeholder="names only"></div><div><label>Venue short name</label><input id="mVenueTag" value="' + esc(S.match.venueTag || "") + '" placeholder="e.g. SWPC"></div></div>') + '</div>';
   h += notesCard();
@@ -2377,7 +2377,7 @@ function renderMatch(){
   h += syncCard();
   if(!ro) h += rolesCard() + archiveCard();
   h += regCard();
-  h += '<div class="card"><h3>Backup</h3><div class="grid2"><button type="button" data-act="backup">Export backup</button><button type="button" data-act="import">Restore…</button></div><p class="small muted">The backup holds everything (match, stages, shooters, scores, signatures, audit trail). Keep one after each stage.</p></div>';
+  h += '<div class="card"><h3>Backup</h3>' + dpCardHTML() + '<div class="grid2" style="margin-top:8px"><button type="button" data-act="backup">Save backup file</button><button type="button" data-act="import">Restore…</button></div><p class="small muted">The backup holds everything (match, stages, shooters, scores, signatures, audit trail). Keep one after each stage. Restore… reads a backup file back in (on this or another phone).</p></div>';
   h += '<div class="card"><h3>Display</h3><label class="agree' + (PREFS.dark ? " on" : "") + '"><input type="checkbox" id="pDark"' + (PREFS.dark ? " checked" : "") + '> Dark mode</label><label class="agree' + (PREFS.big ? " on" : "") + '"><input type="checkbox" id="pBig"' + (PREFS.big ? " checked" : "") + '> Larger text</label></div>';
   if(S.audit.length) h += '<details class="card"><summary>Audit trail (' + S.audit.length + ')</summary><ul class="list-plain small">' + S.audit.slice().reverse().slice(0, 60).map(function(a){ var p = String(a.key || "").split("|"), st = stageById(p[0]), sh = shooterById(p[1]); return "<li>" + fmtWhen(a.at) + " · " + esc(a.device || "") + "<br><b>" + (st ? "Stage " + st.no + " " : "") + esc(sh ? shName(sh) : "") + "</b> " + esc(a.note || "") + (a.from || a.to ? "<br>" + esc(a.from || "") + " → " + esc(a.to || "") : "") + "</li>"; }).join("") + '</ul></details>';
   h += '<details class="card"><summary>How scoring works</summary><div class="small"><p><b>Negative model</b> (shot timer): time + PZI 1 s + PZII 3 s + 7 s per miss + 3 s per procedural/tactical penalty + 7 s per no-shoot hit − cover bonus (1 s imperfect, 2 s good). Lowest wins (§4.2.4).</p><p><b>Positive model</b> (par time): HZ 7 + PZI 3 + PZII 1 − 7 per miss − 3 per penalty − 7 per no-shoot hit + cover bonus (3 / 6). Highest wins.</p><p>Each target counts its best required hits (HZ first); missing hits are misses, filled in automatically. Not engaged = as many misses as the target’s required hits (1-hit plate or slug 1, best 2 = 2, Mozambique 3, fixed N = N, buckshot 2) – also for targets not engaged when the par time ran out. Falling steel must fall (standing = miss). Shotgun on paper: 1 round – slug 1 hit, buckshot the 2 best pairs. No-shoot hits are always penalised; procedural, tactical and other penalties only when briefed.</p><p><b>One scoring model per match.</b> Negative match: total time, lowest wins. Positive match: total points, highest wins (equal stage points: faster time ahead). Overall ties: most HZ hits, then shared place.</p><p>Long-Range stages: within par, most hits, fewest shots, then time (§4.3) – ranked on their own, not added to a negative/positive total. QS stages: pass/fail.</p><p>Cover bonus per discrete use of cover: imperfect −1 s / +3 pts, good −2 s / +6 pts.</p><p>Single-firearm match: class rankings (p.17) plus open. Multi-gun match: open rankings only – full match, per firearm (stages using only that firearm) and per stage.</p><p>Full-match overall: only shooters who completed every stage. A DNF still allows a firearm overall where all that firearm’s stages were completed. DQ: the RO records it on the stage where it happened and ticks the stages the shooter had already shot. Those stay ranked; the DQ stage shows DQ; any other stage is “After DQ” (not ranked). The shooter is removed from every overall.</p></div></details>';
@@ -3601,6 +3601,57 @@ function archiveBind(){
     if(b.id === "archUnpub") ask("Remove this match from the public archive?", { ok: "Unpublish", okClass: "danger" }).then(function(ok){ if(ok) archivePublish(true).then(function(){ toast("Removed from the archive"); render(); }).catch(function(er){ alertMsg(er.message); }); });
   };
 }
+/* ===================== Data protection: persistent storage + backup reminders =====================
+   Match data lives only in this browser's storage (localStorage + IndexedDB for signatures). This module:
+   - asks the browser to keep that storage (navigator.storage.persist) and shows whether it is protected;
+   - remembers when the last backup FILE was saved, and whether scores changed since (fingerprint, kept outside the match state);
+   - prompts for a backup file when the match is fully scored, and on launch when unsaved work is older than DP_DAYS.
+   It never changes scores or the match state and sends nothing anywhere.                                                        */
+var DP_KEY = "spectreScoring.dp", DP_DAYS = 2;
+var DP = { fp: "", at: "", since: "", prompted: "", donePrompted: "" }, DPRT = { persisted: null, supported: false };
+function dpLoad(){ try{ Object.assign(DP, JSON.parse(localStorage.getItem(DP_KEY) || "{}")); }catch(e){} }
+function dpSave(){ try{ localStorage.setItem(DP_KEY, JSON.stringify(DP)); }catch(e){} }
+function dpHash(s){ var h = 2166136261; for(var i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
+function dpFp(){ return dpHash(JSON.stringify([S.matchId, S.scores, S.stages.length, S.shooters.length, S.conflicts.length])); }
+function dpScoreCount(){ return Object.keys(S.scores || {}).length; }
+/* unsaved = scores exist and differ from what the last backup file held */
+function dpDirty(){ return dpScoreCount() > 0 && dpFp() !== DP.fp; }
+function dpTrack(){ var d = dpDirty(); if(d && !DP.since){ DP.since = nowISO(); dpSave(); } else if(!d && DP.since){ DP.since = ""; dpSave(); } return d; }
+function dpMarkBackedUp(){ DP.fp = dpFp(); DP.at = nowISO(); DP.since = ""; dpSave(); }
+function dpComplete(){ var n = S.stages.length * S.shooters.length; return n > 0 && dpScoreCount() >= n; }
+function dpStandalone(){ try{ return !!(navigator.standalone || (window.matchMedia && matchMedia("(display-mode: standalone)").matches)); }catch(e){ return false; } }
+function dpPersist(){
+  if(!(navigator.storage && navigator.storage.persist)) return Promise.resolve(null);
+  DPRT.supported = true;
+  return navigator.storage.persisted().then(function(p){ return p ? true : navigator.storage.persist(); })
+    .then(function(p){ DPRT.persisted = !!p; return p; }, function(){ DPRT.persisted = false; return false; });
+}
+function dpAgeDays(iso){ return iso ? (Date.now() - Date.parse(iso)) / 86400000 : 0; }
+function dpBackupNow(){ return makeBackup().then(function(b){ return shareOrDownload("spectre-scoring-backup-" + slugify(S.match.name) + "-" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "") + ".json", JSON.stringify(b), "application/json"); })
+  .then(function(r){ if(r !== "cancelled"){ dpMarkBackedUp(); toast("Backup " + (r === "shared" ? "shared" : "saved")); if(U.tab === "match") render(); } return r; }); }
+function dpCardHTML(){
+  var d = dpTrack(), n = dpScoreCount(), st;
+  if(DPRT.persisted === true) st = '<span class="ok">✔ Protected</span> – the browser has agreed not to clear this app’s data on its own.';
+  else if(DPRT.supported) st = '<b>Not protected</b> – the browser may clear this data if the phone runs low on space' + (dpStandalone() ? "" : ' or (iPhone Safari) after 7 days without opening the app. Add it to the Home Screen (Share → Add to Home Screen) and use it from there') + '.';
+  else st = '<b>Unknown</b> – this browser cannot report it. Save backup files.';
+  return '<div class="msg ' + (d ? "bad" : "ok") + ' small" id="dpStat"><b>Data on this phone</b><br>Storage: ' + st + '<br>Last backup file: ' + (DP.at ? esc(fmtWhen(DP.at)) : "never") +
+    (n ? (d ? '<br><b>' + n + ' score(s): changes since the last backup file' + (DP.since ? " (since " + esc(fmtWhen(DP.since)) + ")" : "") + '.</b> Save one now and keep it off the phone (e-mail, Drive, WhatsApp to yourself).' : '<br>All scores are in the last backup file.') : "") +
+    '<br><span class="muted">Deleting the app or clearing Safari/Chrome data deletes the match on this phone. A backup file (or published results) is the only copy elsewhere.</span></div>';
+}
+function dpBanner(){ return dpTrack() && dpAgeDays(DP.since) >= DP_DAYS ? '<div class="msg bad small" id="dpBanner"><b>Unsaved scores for ' + Math.floor(dpAgeDays(DP.since)) + ' days.</b> <button type="button" class="slim" data-act="backup">Save backup file</button></div>' : ""; }
+function dpPrompt(msg, key){
+  var mo = $("modal"); if(mo && !mo.hidden && mo.offsetParent !== null && getComputedStyle(mo).display !== "none") return;
+  DP[key] = key === "donePrompted" ? S.matchId : new Date().toISOString().slice(0, 10); dpSave();
+  ask(msg, { ok: "Save backup file", cancel: "Later" }).then(function(ok){ if(ok) dpBackupNow(); });
+}
+/* after every save: the match just became fully scored → offer a backup once per match */
+function dpAfterSave(){ var d = dpTrack(); if(d && dpComplete() && DP.donePrompted !== S.matchId && !U.draft) setTimeout(function(){ if(dpDirty()) dpPrompt("Every shooter has a score on every stage.\nSave a backup file of the match now (and publish the results when ready)? It is the only copy that survives if this phone is lost or its browser data is cleared.", "donePrompted"); }, 600); }
+function dpBoot(){
+  dpLoad(); dpTrack();
+  dpPersist().then(function(){ if(U.tab === "match") render(); });
+  setTimeout(function(){ var today = new Date().toISOString().slice(0, 10);
+    if(dpTrack() && dpAgeDays(DP.since) >= DP_DAYS && DP.prompted !== today && !U.draft) dpPrompt("This phone has " + dpScoreCount() + " score(s) not in any backup file since " + fmtWhen(DP.since) + ".\nSave a backup file now?", "prompted"); }, 1500);
+}
 /* ===================== start-up and events ===================== */
 function onClick(e){
   var b = e.target.closest("button,[data-act]"); if(!b) return;
@@ -3645,7 +3696,7 @@ function onClick(e){
     case "print": printResults(); break;
     case "sheets": sheetsDialog(); break;
     case "pack": printPack(); break;
-    case "backup": makeBackup().then(function(b){ return shareOrDownload("spectre-scoring-backup-" + slugify(S.match.name) + "-" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "") + ".json", JSON.stringify(b), "application/json"); }).then(function(r){ if(r !== "cancelled") toast("Backup " + (r === "shared" ? "shared" : "saved")); }); break;
+    case "backup": dpBackupNow(); break;
     case "addsh": editShooter(null); break;
     case "stagepack": stagePackDialog(); break;
     case "scorespack": sendScores(false); break;
@@ -3663,7 +3714,7 @@ function boot(){
   $("fileAny").onchange = function(){ var f = this.files && this.files[0], inp = this; if(!f) return; var rd = new FileReader(); rd.onload = function(){ inp.value = ""; importFileText(String(rd.result || ""), f.name); }; rd.readAsText(f); };
   /* resume an unfinished entry after a reload */
   try{ var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); if(d && stageById(d.stage) && shooterById(d.shooter) && d.draft){ U.stage = d.stage; U.shooter = d.shooter; U.draft = d.draft; U.editing = d.editing; U.screen = d.screen === "confirm" ? "confirm" : "entry"; U.tab = "score"; } }catch(e){}
-  syncBoot(); regLoad();
+  syncBoot(); regLoad(); dpBoot();
   sigOpen().then(function(){ render(); });
   render();
   if(!S.device.name && !U.draft) setTimeout(function(){ if(!S.device.name) ask("Welcome to Spectre Scoring.\nName this phone (e.g. Main, RO Stage 2):", { input: true, ok: "Save", cancel: "Later" }).then(function(v){ if(v && v.trim()){ S.device.name = v.trim(); saveState(); render(); } }); }, 300);
