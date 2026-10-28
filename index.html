@@ -398,7 +398,7 @@ var TORSO_MOUNT = { hanging: "hanging", "static": "static" };
 
 function newStage(title){
   return { id: uid(), title: title || "New stage", subtitle: "", division: "DB", firearms: ["handgun"], classesAuto: true, classes: [],
-    eligibleLabel: "", limited: true, scoring: "negative", scoringAuto: true, parTime: null, cover: false,
+    eligibleLabel: "", limited: true, scoring: "negative", scoringAuto: true, parTime: null, cover: false, coverItems: null,
     startCondition: "", staging: "", procedure: [], layout: [], mdNotes: [], diagramNote: "",
     downrange: 0, semiAuto: false, ranking: "auto", req: {}, qualStd: "", diagramPage: false,
     loads: {}, engagements: [], transitions: [], penalties: { procedural: true, tactical: true, noshoot: true, other: "" },
@@ -412,6 +412,8 @@ function normalizeStage(s){
   var d = newStage(); var o = {};
   Object.keys(d).forEach(function(k){ o[k] = (s && s[k] !== undefined && s[k] !== null) ? s[k] : d[k]; });
   if(s && s.parTime === null) o.parTime = null;
+  /* number of cover items on the stage (caps the use-of-cover bonus count); null = not set */
+  o.coverItems = (o.coverItems === null || o.coverItems === undefined || o.coverItems === "" || isNaN(parseInt(o.coverItems, 10))) ? null : Math.max(0, parseInt(o.coverItems, 10));
   if(!o.id) o.id = uid();
   ["firearms","classes","procedure","layout","mdNotes","engagements","transitions","items","path"].forEach(function(k){ if(!Array.isArray(o[k])) o[k] = []; });
   if(typeof o.loads !== "object" || Array.isArray(o.loads)) o.loads = {};
@@ -822,6 +824,7 @@ function runChecks(st, S){
   if(st.scoring === "positive" && !(+st.parTime > 0)) add("error", "PAR_MISSING", "Positive scoring needs a Par Time.", "§4.1.1, p.60; §4.2.1, p.61");
   if(st.scoring === "lr" && +st.parTime > 0) add("info", "LR_PAR", "LR Par Time: brief it; shots after expiry do not count and unengaged targets are misses.", "§4.3.4, p.66");
   if(st.division === "CQ" && !st.cover) add("error", "COVER_CQ", "CQ always applies use-of-cover bonuses.", "§3.1, p.47");
+  if((st.cover || st.division === "CQ") && st.division !== "LR" && st.coverItems == null) add("info", "COVER_ITEMS", "Set the number of cover items so the scoring app can check the cover bonus count.", "§4.2.3, p.63-64");
   if(st.division === "LR" && st.cover) add("error", "COVER_LR", "Use of cover does not apply in LR (barricades are support, not cover).", "§3.5, p.56; §4.2.3, p.64");
   if((st.division === "DB" || st.division === "QS" || st.division === "BL") && st.cover) add("info", "COVER_BRIEF", "Cover bonus on a " + st.division + " stage: it must be stated in the COF briefing.", st.division === "BL" ? "§3.4, p.54" : "§4.2.3, p.64");
   add("info", "WALK", st.division + " walkthrough: " + div.walk, div.ref);
@@ -1452,6 +1455,8 @@ function penaltyList(st){
   if(p.other && String(p.other).trim()) out.push({ k: "other", n: "Other: " + String(p.other).trim(), on: true, v: 3, ref: "briefed" });
   return out;
 }
+/* number of cover items set for the stage (designer or Match tab); null = not set -> the target count is the check */
+function coverItemsOf(st){ var n = st ? st.coverItems : null; if(n === null || n === undefined || n === "") return null; n = parseInt(n, 10); return isNaN(n) || n < 0 ? null : n; }
 function coverOn(st){ var m = stageModel(st); return (m === "negative" || m === "positive") && (st.division === "CQ" || !!st.cover); }
 /* no-shoot / hostage hits are always penalised (MD ruling), even when not ticked in the brief */
 
@@ -1511,7 +1516,7 @@ function calcScore(st, sc){
   noShoots(st).forEach(function(n){ var h = nonNeg(sc.ns && sc.ns[n.id]); res.ns += h; });
   penaltyList(st).forEach(function(p){ var n = nonNeg(sc.pens && sc.pens[p.k]); if(n && p.on) res.pen += n; if(n && !p.on) res.warnings.push(p.n + " penalties were not briefed – not applied (§4.4.5)."); });
   if(coverOn(st)){ res.coverImp = nonNeg(sc.cover && sc.cover.imp); res.coverGood = nonNeg(sc.cover && sc.cover.good); 
-    var nT = stageTargets(st).length; if(res.coverImp + res.coverGood > nT) res.warnings.push("Cover bonus entered " + (res.coverImp + res.coverGood) + " times on a stage with " + nT + " target" + (nT === 1 ? "" : "s") + " – check the count."); }
+    var ci = coverItemsOf(st), nT = ci != null ? ci : stageTargets(st).length, wh = ci != null ? " cover item" : " target"; if(res.coverImp + res.coverGood > nT) res.warnings.push("Cover bonus entered " + (res.coverImp + res.coverGood) + " times on a stage with " + nT + wh + (nT === 1 ? "" : "s") + " – check the count."); }
   var neg = model === "negative";
   if(neg){
     if(!(sc.time > 0)) res.errors.push("Enter the time.");
@@ -1947,7 +1952,7 @@ function thumb(st, w, h){ try{ return diagramSVG(st, w || 110, h || 80, {}); }ca
 function stageChips(st){
   var m = stageModel(st), tot = stageTotal(st);
   return '<span class="chip">' + esc(st.division) + '</span><span class="chip">' + esc(MODELS[st.scoring].n) + '</span>' +
-    '<span class="chip">' + tot.rounds + (tot.fixed ? "" : "+") + ' rds</span>' + (st.limited ? '<span class="chip">Limited</span>' : '<span class="chip">Unlimited</span>') + (st.parTime ? '<span class="chip">Par ' + st.parTime + ' s</span>' : "") +
+    '<span class="chip">' + tot.rounds + (tot.fixed ? "" : "+") + ' rds</span>' + (st.limited ? '<span class="chip">Limited</span>' : '<span class="chip">Unlimited</span>') + (st.parTime ? '<span class="chip">Par ' + st.parTime + ' s</span>' : "") + (coverOn(st) && coverItemsOf(st) != null ? '<span class="chip">Cover ×' + coverItemsOf(st) + '</span>' : "") +
     '<span class="chip">' + st.firearms.map(FN).join(" + ") + '</span>';
 }
 function scoredCount(st){ return S.shooters.filter(function(sh){ return scoreOf(st.id, sh.id); }).length; }
@@ -2024,7 +2029,7 @@ function renderEntry(){
       var nss = noShoots(st);
       if(nss.length){ h += '<div class="card"><h3>No-shoot / hostage hits</h3>' + nss.map(function(n){ return ctrRow("ns." + n.id, esc(n.label) + ' <small class="muted">' + (n.stapled ? "stapled" : NS_KIND[n.kind]) + '</small>', (sc.ns[n.id] | 0)); }).join("") + '<div class="small muted">' + (model === "negative" ? "+7 s" : "−7 pts") + ' per hit (§4.4.4) – always applied</div></div>'; }
       h += '<div class="card"><h3>Penalties</h3>' + penaltyList(st).map(function(p){ return p.on ? ctrRow("pens." + p.k, esc(p.n), (sc.pens[p.k] | 0)) : '<div class="small muted">' + esc(p.n) + ': not briefed for this stage</div>'; }).join("") + '<div class="small muted">' + (model === "negative" ? "+3 s" : "−3 pts") + ' each, per occurrence (§4.4.2–4.4.3)</div></div>';
-      if(coverOn(st)) h += '<div class="card"><h3>Use of cover (bonus)</h3>' + ctrRow("cover.imp", "Imperfect", sc.cover.imp | 0) + ctrRow("cover.good", "Good / perfect", sc.cover.good | 0) + '<div class="small muted">' + (model === "negative" ? "−1 s / −2 s" : "+3 / +6 pts") + ' per discrete use of cover (§4.2.3)</div></div>';
+      if(coverOn(st)) h += '<div class="card"><h3>Use of cover (bonus)</h3>' + ctrRow("cover.imp", "Imperfect", sc.cover.imp | 0) + ctrRow("cover.good", "Good / perfect", sc.cover.good | 0) + '<div class="small muted">' + (model === "negative" ? "−1 s / −2 s" : "+3 / +6 pts") + ' per discrete use of cover (§4.2.3)' + (coverItemsOf(st) != null ? ' · ' + coverItemsOf(st) + ' cover item' + (coverItemsOf(st) === 1 ? '' : 's') + ' on this stage' : '') + '</div></div>';
     }
   }
   /* DNF and DQ are kept apart (no side-by-side mis-tap): DNF first, then a divider and the DQ on its own row; both still confirm */
@@ -2238,7 +2243,7 @@ function renderMatch(){
   h += '<div class="card"><h3>This phone</h3><label>Phone name (shown on packs and scores)</label><input id="devName" value="' + esc(S.device.name) + '" placeholder="e.g. Main, RO Stage 2"><div class="small muted" style="margin-top:6px">Scoring model: <b>' + esc(matchModel() || "–") + '</b>' + (isMultiGun() ? " · multi-gun (open rankings)" : "") + '<br>Role: <b>' + (ro ? "RO phone" : "Main phone") + '</b>' + (ro && S.ro ? " – stages " + S.stages.filter(function(s){ return S.ro.assigned.indexOf(s.id) >= 0; }).map(function(s){ return s.no; }).join(", ") + (S.ro.main ? ", from " + esc(S.ro.main) : "") : "") + '</div>' + (ro ? '<button type="button" class="wide" style="margin-top:8px" data-act="makemain">Make this the main phone…</button>' : "") + '</div>';
   h += '<div class="card"><h3>Import</h3><button type="button" class="primary wide" data-act="import">Import a file…</button><p class="small muted">Stage Designer match or stage file (any version), shooters CSV, a stage pack, a scores pack or a backup – the type is detected.</p><button type="button" class="wide" data-act="scan">Scan QR codes…</button></div>';
   if(!ro){
-    h += '<div class="card"><h3>Stages (' + S.stages.length + ')</h3>' + (S.stages.length ? '<ul class="list-plain">' + S.stages.map(function(st){ return '<li class="row"><span class="grow"><b>Stage ' + st.no + '</b> – ' + esc(st.title) + (stCancelled(st) ? ' <span class="badge bad">Cancelled</span>' : '') + '<br><span class="small muted">' + st.division + ' · ' + MODELS[st.scoring].n + ' · ' + stageTotal(st).rounds + ' rds · ' + scoredCount(st) + ' scored' + (stCancelled(st) ? ' · not counted' : '') + '</span></span>' + (S.role !== "ro" ? '<button type="button" class="slim" data-cxst="' + st.id + '">' + (stCancelled(st) ? 'Reinstate' : 'Cancel stage') + '</button>' : '') + '<button type="button" class="slim danger" data-delst="' + st.id + '">Remove</button></li>'; }).join("") + '</ul>' + (S.role !== "ro" ? '<div style="margin-top:18px;border-top:1px solid #8884;padding-top:12px"><button type="button" class="danger wide" data-act="clearst">Clear stages…</button></div>' : "") : '<p class="muted">None yet – import the Stage Designer match file.</p>') + '</div>';
+    h += '<div class="card"><h3>Stages (' + S.stages.length + ')</h3>' + (S.stages.length ? '<ul class="list-plain">' + S.stages.map(function(st){ return '<li class="row"><span class="grow"><b>Stage ' + st.no + '</b> – ' + esc(st.title) + (stCancelled(st) ? ' <span class="badge bad">Cancelled</span>' : '') + '<br><span class="small muted">' + st.division + ' · ' + MODELS[st.scoring].n + ' · ' + stageTotal(st).rounds + ' rds · ' + scoredCount(st) + ' scored' + (stCancelled(st) ? ' · not counted' : '') + '</span></span>' + (S.role !== "ro" ? '<button type="button" class="slim" data-cxst="' + st.id + '">' + (stCancelled(st) ? 'Reinstate' : 'Cancel stage') + '</button> <button type="button" class="slim" data-covst="' + st.id + '"' + (coverOn(st) ? '' : ' hidden') + '>Cover items' + (coverItemsOf(st) != null ? ' (' + coverItemsOf(st) + ')' : '') + '</button>' : '') + '<button type="button" class="slim danger" data-delst="' + st.id + '">Remove</button></li>'; }).join("") + '</ul>' + (S.role !== "ro" ? '<div style="margin-top:18px;border-top:1px solid #8884;padding-top:12px"><button type="button" class="danger wide" data-act="clearst">Clear stages…</button></div>' : "") : '<p class="muted">None yet – import the Stage Designer match file.</p>') + '</div>';
     h += '<div class="card"><h3>RO phones (up to 3)</h3><p class="small muted">Without live sync: give each RO phone a stage pack; it scores offline and sends a scores pack back, which this phone merges.</p><button type="button" class="wide primary" data-act="stagepack"' + (S.stages.length ? "" : " disabled") + '>Make a stage pack for an RO phone…</button>' +
       (S.merged.length ? '<div class="small" style="margin-top:8px"><b>Merged:</b><ul class="list-plain">' + S.merged.slice(-6).reverse().map(function(m){ return "<li>" + esc(m.from) + " – " + fmtWhen(m.at) + ": " + m.added + " new, " + m.same + " same, " + m.conflicts + " conflict(s)</li>"; }).join("") + '</ul></div>' : "") +
       (S.conflicts.length ? '<button type="button" class="wide danger" style="margin-top:8px" data-act="merge">Resolve ' + S.conflicts.length + ' conflict(s)</button>' : "") + '</div>';
@@ -3436,6 +3441,10 @@ function onClick(e){
   if(d.edsh) return editShooter(d.edsh);
   if(d.pick){ if(SEL.ids[d.pick]) delete SEL.ids[d.pick]; else SEL.ids[d.pick] = 1; return keepScroll(renderShooters); }
   if(d.resolve){ var r = d.resolve.split("|"); resolveConflict(r[0], r[1]); return renderMerge(); }
+  if(d.covst){ var cv = stageById(d.covst); if(!cv || S.role === "ro") return; var cur = coverItemsOf(cv);
+    return ask("Number of cover items on stage " + cv.no + " – " + cv.title + " (the cover bonus count is checked against it; leave empty to check against the " + stageTargets(cv).length + " target(s)).", { input: true, value: cur == null ? "" : String(cur), placeholder: "e.g. 3", ok: "Save" }).then(function(v){ if(v === null) return; v = String(v).trim();
+      var n = v === "" ? null : parseInt(v, 10); if(n !== null && (isNaN(n) || n < 0 || String(n) !== v)) return toast("Enter a whole number (0 or more), or leave it empty.");
+      if(n === cur) return; cv.coverItems = n; S.audit.push({ at: nowISO(), device: S.device.name, key: cv.id, note: "Cover items, stage " + cv.no + ": " + (cur == null ? "not set" : cur) + " -> " + (n == null ? "not set" : n) }); saveState(); render(); toast(n == null ? "Cover items cleared" : "Stage " + cv.no + ": " + n + " cover item" + (n === 1 ? "" : "s")); }); }
   if(d.cxst){ var cs = stageById(d.cxst); if(!cs || S.role === "ro") return; var was = stCancelled(cs), sn = scoredCount(cs);
     return ask(was ? "Reinstate stage " + cs.no + " – " + cs.title + "? It counts in the match again" + (sn ? ", with its " + sn + " score(s)" : "") + "." : "Cancel stage " + cs.no + " – " + cs.title + "? The match is then ranked only on the other stages." + (sn ? " Its " + sn + " score(s) are kept but ignored (a DQ entered there no longer applies)." : "") + " You can reinstate it later.", { ok: was ? "Reinstate" : "Cancel stage", okClass: was ? "" : "danger", cancel: "Back" }).then(function(ok){ if(!ok) return;
       var c = (S.match.cancelled || []).filter(function(id){ return id !== cs.id && stageById(id); }); if(!was) c.push(cs.id); S.match.cancelled = c;
