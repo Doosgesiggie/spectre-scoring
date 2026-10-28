@@ -3082,7 +3082,7 @@ function sheetData(sh){
     var penT = x.noCounts || lr ? "–" : neg ? f2(x.miss * 7 + x.pen * 3 + x.ns * 7 - x.coverImp - x.coverGood * 2) : String(-(x.miss * 7 + x.pen * 3 + x.ns * 7) + x.coverImp * 3 + x.coverGood * 6);
     var b = sc.auto ? { name: "Auto: " + dqSrcText(sc), device: "", at: null } : scoredByOf(sc);
     d.rows.push({ no: st.no, title: st.title, hz: z("hz"), pz1: z("pz1"), pz2: z("pz2"), miss: z("miss"), standing: z("standing"), pen: z("pen"), ns: z("ns"),
-      time: sc.time != null && !x.noCounts ? f2(sc.time) : "–", penT: penT, score: scoreText(st, x), place: sheetStagePlace(stageResults(st), sh.id),
+      time: sc.time != null && !x.noCounts ? f2(sc.time) : "–", penT: penT, cvi: x.noCounts || lr ? undefined : x.coverImp || undefined, cvg: x.noCounts || lr ? undefined : x.coverGood || undefined, score: scoreText(st, x), place: sheetStagePlace(stageResults(st), sh.id),
       by: b.name, dev: b.device && b.device !== b.name ? b.device : "", at: sheetAt(b.at), sigKey: sc.sig ? sc.key + "#" + sc.rev : "", note: nt });
   });
   return d;

@@ -231,6 +231,11 @@ function atVerifyDoc(name, rts, made, year){ return { v: 2, kind: "attendance", 
    sigs (optional) = { sigKey: dataURL } – the shooter's e-signature column appears only when at least one exists. */
 function shEsc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
 function sheetByText(r){ return r && r.by ? "Scored by " + r.by + (r.at ? " · " + r.at : "") : ""; }
+/* cover bonus (§4.2.3) of one row in seconds: cvi/cvg (imperfect / good counts) when published, else derived from penT on older records
+   (penT = misses×7 + procedurals×3 + no-shoots×7 − cover) */
+function sheetCov(r){ if(!r || typeof r.hz !== "number") return 0; if(typeof r.cvi === "number" || typeof r.cvg === "number") return (r.cvi || 0) + (r.cvg || 0) * 2;
+  var pt = parseFloat(r.penT), b = (r.miss || 0) * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7; return isFinite(pt) && b - pt > 0.005 ? Math.round((b - pt) * 100) / 100 : 0; }
+function sheetNum(x){ var n = parseFloat(String(x == null ? "" : x).replace(/[^\d.\-]/g, "")); return isNaN(n) ? null : n; }
 function sheetRender(d, sigs, printed){
   var e = shEsc, m = d.match || {}, sh = d.sh || {}, v = function(x){ return x == null || x === "" ? "" : e(x); };
   var sigOf = function(r){ return r && r.sigKey && sigs ? sigs[r.sigKey] : null; }, anySig = (d.rows || []).some(function(r){ return !!sigOf(r); });
@@ -239,17 +244,22 @@ function sheetRender(d, sigs, printed){
     '<tr><th>Member no.</th><td>' + (sh.member ? e(sh.member) : sh.visitor ? "Visitor (not a club member)" : "") + '</td><th>Squad</th><td>' + v(sh.squad) + '</td></tr>' +
     '<tr><th>Division(s)</th><td colspan="3">' + e(sh.divs) + (sh.cat ? ' · Category: ' + e(sh.cat) : "") + '</td></tr></table>';
   var fns = [], fnOf = function(r){ if(!r || !r.note) return ""; fns.push({ no: r.no, text: r.note }); return '<sup class="fn">' + fns.length + '</sup>'; };
-  var cols = 12 + (anySig ? 1 : 0);
-  h += '<table class="shst"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th>Steel standing</th><th>Proc. / pen.</th><th>No-shoot</th><th>Raw time</th><th>' + (d.neg ? "Penalty time" : "Penalty pts") + '</th><th>Stage score</th><th>Place</th>' + (anySig ? '<th>Shooter e-sig.</th>' : "") + '</tr>';
+  var cvr = d.neg !== false && (d.rows || []).some(function(r){ return !r.none && sheetCov(r) > 0; }), cvl = [];
+  var cols = 12 + (cvr ? 1 : 0) + (anySig ? 1 : 0);
+  h += '<table class="shst"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th>Steel standing</th><th>Proc. / pen.</th><th>No-shoot</th><th>Raw time</th><th>' + (d.neg ? "Penalty time" : "Penalty pts") + '</th>' + (cvr ? '<th>Cover bonus</th>' : "") + '<th>Stage score</th><th>Place</th>' + (anySig ? '<th>Shooter e-sig.</th>' : "") + '</tr>';
   (d.rows || []).forEach(function(r){
     var name = '<b>' + e(r.no) + '</b> ' + e(r.title);
     if(r.none){ h += '<tr><td>' + name + '</td><td colspan="' + (cols - 1) + '" class="c">' + (r.cancelled ? 'Cancelled – not counted' : 'Not scored') + fnOf(r) + '</td></tr>'; return; }
     var sg = sigOf(r);
-    h += '<tr><td>' + name + '</td>' + ["hz", "pz1", "pz2", "miss", "standing", "pen", "ns", "time", "penT"].map(function(k){ return '<td class="n">' + v(r[k]) + '</td>'; }).join("") +
+    h += '<tr><td>' + name + '</td>' + ["hz", "pz1", "pz2", "miss", "standing", "pen", "ns", "time"].map(function(k){ return '<td class="n">' + v(r[k]) + '</td>'; }).join("") + (function(){
+      if(!cvr) return '<td class="n">' + v(r.penT) + '</td>'; var c = sheetCov(r), sc = sheetNum(r.score), t = sheetNum(r.time), p = sc != null && t != null ? Math.round((sc - t + c) * 100) / 100 : null;
+      if(c && p != null) cvl.push("Stage " + r.no + ": " + t.toFixed(2) + " + " + p.toFixed(2) + " − " + c + " cover bonus = " + sc.toFixed(2) + " s");
+      return '<td class="n">' + (p != null ? p.toFixed(2) : v(r.penT)) + '</td><td class="n">' + (c ? "−" + c : "") + '</td>'; })() +
       '<td class="n"><b>' + v(r.score) + '</b>' + fnOf(r) + '</td><td class="n">' + v(r.place) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
     if(r.by) h += '<tr class="shby"><td></td><td colspan="' + (cols - 1) + '">' + e(sheetByText(r)) + (r.dev ? ' <span class="muted">(' + e(r.dev) + ')</span>' : "") + '</td></tr>';
   });
   h += '</table>';
+  if(cvr) h += '<div class="shnote">Stage score = raw time + penalty time (PZI ×1, PZII ×3, misses ×7, procedurals ×3, no-shoots ×7) − cover bonus (§4.2.3: imperfect cover 1 s, good cover 2 s). ' + e(cvl.join(" · ")) + '</div>';
   var ov = d.ov;
   if(ov) h += '<table class="shtot"><tr><th>Match total</th><td><b>' + e(ov.total) + '</b></td><th>Overall place</th><td><b>' + e(ov.place) + '</b>' + (ov.of && /^\d/.test(ov.place) ? ' of ' + e(ov.of) : "") + '</td></tr></table>';
   if(fns.length) h += '<ol class="shfn">' + fns.map(function(f){ return '<li>Stage ' + e(f.no) + ': ' + e(f.text) + '</li>'; }).join("") + '</ol>';

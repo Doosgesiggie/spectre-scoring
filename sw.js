@@ -1,5 +1,5 @@
 /* Spectre Scoring service worker: caches the whole app for full offline use. Relative URLs, so it works from any sub-path. */
-var CACHE = "spectre-scoring-312a2b62606e";
+var CACHE = "spectre-scoring-b964604ad731";
 var FILES = ["./", "./index.html", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png", "./indemnity-pdf.js", "./indemnity-form.pdf", "./jsqr.js", "./archive.html", "./verify.html"]; /* jsqr.js: scan fallback; archive/verify open offline with a no-signal notice */ /* indemnity forms work with no signal */
 self.addEventListener("install", function(e){
   e.waitUntil(caches.open(CACHE).then(function(c){ return c.addAll(FILES.map(function(f){ return new Request(f, { cache: "reload" }); })); }));
@@ -19,6 +19,11 @@ self.addEventListener("fetch", function(e){
     return;
   }
   if(url.origin !== location.origin) return;
+  /* archive / verify are online pages: network first (a phone must never draw an old archive build), cached copy only with no signal */
+  if(/\/(archive|verify)\.html$/.test(url.pathname)){
+    e.respondWith(fetch(e.request).catch(function(){ return caches.match(e.request, { ignoreSearch: true }).then(function(hit){ return hit || new Response("", { status: 504 }); }); }));
+    return;
+  }
   e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(function(hit){
     if(hit) return hit;
     return fetch(e.request).then(function(r){ return r; }).catch(function(){ if(e.request.mode === "navigate") return caches.match("./index.html"); return new Response("", { status: 504 }); });

@@ -247,6 +247,11 @@ var SS_FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.14.1/"; /* modular 
    sigs (optional) = { sigKey: dataURL } – the shooter's e-signature column appears only when at least one exists. */
 function shEsc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
 function sheetByText(r){ return r && r.by ? "Scored by " + r.by + (r.at ? " · " + r.at : "") : ""; }
+/* cover bonus (§4.2.3) of one row in seconds: cvi/cvg (imperfect / good counts) when published, else derived from penT on older records
+   (penT = misses×7 + procedurals×3 + no-shoots×7 − cover) */
+function sheetCov(r){ if(!r || typeof r.hz !== "number") return 0; if(typeof r.cvi === "number" || typeof r.cvg === "number") return (r.cvi || 0) + (r.cvg || 0) * 2;
+  var pt = parseFloat(r.penT), b = (r.miss || 0) * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7; return isFinite(pt) && b - pt > 0.005 ? Math.round((b - pt) * 100) / 100 : 0; }
+function sheetNum(x){ var n = parseFloat(String(x == null ? "" : x).replace(/[^\d.\-]/g, "")); return isNaN(n) ? null : n; }
 function sheetRender(d, sigs, printed){
   var e = shEsc, m = d.match || {}, sh = d.sh || {}, v = function(x){ return x == null || x === "" ? "" : e(x); };
   var sigOf = function(r){ return r && r.sigKey && sigs ? sigs[r.sigKey] : null; }, anySig = (d.rows || []).some(function(r){ return !!sigOf(r); });
@@ -255,17 +260,22 @@ function sheetRender(d, sigs, printed){
     '<tr><th>Member no.</th><td>' + (sh.member ? e(sh.member) : sh.visitor ? "Visitor (not a club member)" : "") + '</td><th>Squad</th><td>' + v(sh.squad) + '</td></tr>' +
     '<tr><th>Division(s)</th><td colspan="3">' + e(sh.divs) + (sh.cat ? ' · Category: ' + e(sh.cat) : "") + '</td></tr></table>';
   var fns = [], fnOf = function(r){ if(!r || !r.note) return ""; fns.push({ no: r.no, text: r.note }); return '<sup class="fn">' + fns.length + '</sup>'; };
-  var cols = 12 + (anySig ? 1 : 0);
-  h += '<table class="shst"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th>Steel standing</th><th>Proc. / pen.</th><th>No-shoot</th><th>Raw time</th><th>' + (d.neg ? "Penalty time" : "Penalty pts") + '</th><th>Stage score</th><th>Place</th>' + (anySig ? '<th>Shooter e-sig.</th>' : "") + '</tr>';
+  var cvr = d.neg !== false && (d.rows || []).some(function(r){ return !r.none && sheetCov(r) > 0; }), cvl = [];
+  var cols = 12 + (cvr ? 1 : 0) + (anySig ? 1 : 0);
+  h += '<table class="shst"><tr><th>Stage</th><th>HZ</th><th>PZI</th><th>PZII</th><th>Miss</th><th>Steel standing</th><th>Proc. / pen.</th><th>No-shoot</th><th>Raw time</th><th>' + (d.neg ? "Penalty time" : "Penalty pts") + '</th>' + (cvr ? '<th>Cover bonus</th>' : "") + '<th>Stage score</th><th>Place</th>' + (anySig ? '<th>Shooter e-sig.</th>' : "") + '</tr>';
   (d.rows || []).forEach(function(r){
     var name = '<b>' + e(r.no) + '</b> ' + e(r.title);
     if(r.none){ h += '<tr><td>' + name + '</td><td colspan="' + (cols - 1) + '" class="c">' + (r.cancelled ? 'Cancelled – not counted' : 'Not scored') + fnOf(r) + '</td></tr>'; return; }
     var sg = sigOf(r);
-    h += '<tr><td>' + name + '</td>' + ["hz", "pz1", "pz2", "miss", "standing", "pen", "ns", "time", "penT"].map(function(k){ return '<td class="n">' + v(r[k]) + '</td>'; }).join("") +
+    h += '<tr><td>' + name + '</td>' + ["hz", "pz1", "pz2", "miss", "standing", "pen", "ns", "time"].map(function(k){ return '<td class="n">' + v(r[k]) + '</td>'; }).join("") + (function(){
+      if(!cvr) return '<td class="n">' + v(r.penT) + '</td>'; var c = sheetCov(r), sc = sheetNum(r.score), t = sheetNum(r.time), p = sc != null && t != null ? Math.round((sc - t + c) * 100) / 100 : null;
+      if(c && p != null) cvl.push("Stage " + r.no + ": " + t.toFixed(2) + " + " + p.toFixed(2) + " − " + c + " cover bonus = " + sc.toFixed(2) + " s");
+      return '<td class="n">' + (p != null ? p.toFixed(2) : v(r.penT)) + '</td><td class="n">' + (c ? "−" + c : "") + '</td>'; })() +
       '<td class="n"><b>' + v(r.score) + '</b>' + fnOf(r) + '</td><td class="n">' + v(r.place) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
     if(r.by) h += '<tr class="shby"><td></td><td colspan="' + (cols - 1) + '">' + e(sheetByText(r)) + (r.dev ? ' <span class="muted">(' + e(r.dev) + ')</span>' : "") + '</td></tr>';
   });
   h += '</table>';
+  if(cvr) h += '<div class="shnote">Stage score = raw time + penalty time (PZI ×1, PZII ×3, misses ×7, procedurals ×3, no-shoots ×7) − cover bonus (§4.2.3: imperfect cover 1 s, good cover 2 s). ' + e(cvl.join(" · ")) + '</div>';
   var ov = d.ov;
   if(ov) h += '<table class="shtot"><tr><th>Match total</th><td><b>' + e(ov.total) + '</b></td><th>Overall place</th><td><b>' + e(ov.place) + '</b>' + (ov.of && /^\d/.test(ov.place) ? ' of ' + e(ov.of) : "") + '</td></tr></table>';
   if(fns.length) h += '<ol class="shfn">' + fns.map(function(f){ return '<li>Stage ' + e(f.no) + ': ' + e(f.text) + '</li>'; }).join("") + '</ol>';
@@ -327,6 +337,10 @@ var VP_WORDS = ["zero","one","two","three","four","five","six","seven","eight","
 var VP_MARKS = ["*", "**", "\u2020", "\u2021", "\u2020\u2020", "\u2021\u2021"];
 
 /* ---------- the content model (everything derived from the published data) ---------- */
+/* cover bonus (§4.2.3: imperfect −1 s, good −2 s) of one payload row: explicit cvi/cvg, else derived from penT
+   (older records: penT = misses×7 + procedurals×3 + no-shoots×7 − cover) */
+function vpCov(r){ var isN = function(v){ return typeof v === "number" && isFinite(v); }; if(!r || !isN(r.hz)) return 0; if(isN(r.cvi) || isN(r.cvg)) return (r.cvi || 0) + (r.cvg || 0) * 2;
+  var pt = parseFloat(r.penT), base = (r.miss || 0) * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7; return isFinite(pt) && base - pt > 0.005 ? Math.round((base - pt) * 100) / 100 : 0; }
 function vpModel(m){
   var mt = m.match || {}, sheets = m.sheets || [], isN = function(v){ return typeof v === "number"; };
   var stMap = {};
@@ -340,7 +354,17 @@ function vpModel(m){
   var cnt = function(r){ return isN(r.hz) ? r.hz + r.pz1 + r.pz2 + r.miss : null; };
   stages.forEach(function(st){ if(st.rounds) return; var f = {}; sheets.forEach(function(s){ var r = rowOf(s, st.no), c = r && cnt(r); if(c) f[c] = (f[c] || 0) + 1; }); var best = 0; Object.keys(f).forEach(function(k){ if(!best || f[k] > f[best]) best = k; }); st.rounds = +best || 0; });
   var paper = sheets.some(function(s){ return (s.rows || []).some(function(r){ return /paper|hand-?written/i.test(r.by || ""); }); });
-  var pen = function(r){ return r.pz1 + r.pz2 * 3 + r.miss * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7; };
+  var cov = vpCov;
+  var pen = function(r){ return r.pz1 + r.pz2 * 3 + r.miss * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7 - cov(r); };
+  /* open places: the pack is an open ranking. A single-firearm match publishes class places ("1 (SSP)"), so use the
+     published Open ranking table, else plain numeric places, else rank the scored shooters by their numbers (ties share) */
+  var num = function(p){ return /^\d+$/.test(String(p)); }, scoredPl = function(p){ return /^\d+/.test(String(p)); };
+  var openRank = function(items, val){ var r = items.filter(function(x){ return val(x) != null; }).sort(function(a, b){ return val(a) - val(b); }), out = new Map();
+    r.forEach(function(x, i){ out.set(x, i && val(r[i - 1]) === val(x) ? out.get(r[i - 1]) : i + 1); }); return out; };
+  var openT = (m.tables || []).filter(function(t){ return /^open ranking$/i.test(t.t || "") || /^overall$/i.test(t.t || ""); })[0], ovPl = new Map();
+  if(openT){ var hi = (openT.h || []).indexOf("#"), ni = (openT.h || []).indexOf("Shooter"); if(hi >= 0 && ni >= 0) (openT.r || []).forEach(function(row){ var s = sheets.filter(function(x){ return x.sh.name === row[ni]; })[0]; if(s && num(row[hi])) ovPl.set(s, +row[hi]); }); }
+  if(!ovPl.size){ if(sheets.some(function(s){ return s.ov && num(s.ov.place); })) sheets.forEach(function(s){ if(s.ov && num(s.ov.place)) ovPl.set(s, +s.ov.place); });
+    else ovPl = openRank(sheets.filter(function(s){ return s.ov && scoredPl(s.ov.place); }), function(s){ return vpNum(s.ov.total); }); }
   /* notes: corrections ("sheet read X, correct sum Y"), low-confidence readings and other notes */
   var notes = [];
   sheets.forEach(function(s){ (s.rows || []).forEach(function(r){ if(r.note) notes.push({ st: r.no, s: s, r: r, text: r.note }); }); });
@@ -350,7 +374,8 @@ function vpModel(m){
     if(c && n.r && isN(n.r.hz)){ n.corr = { was: parseFloat(c[1]), now: parseFloat(c[2]), time: vpNum(n.r.time), pen: pen(n.r) }; }
     else if(/overwrit|low[- ]confidence|scribbl|unclear|illegible/i.test(n.text)) n.low = true; });
   var markOf = function(no, s){ for(var i = 0; i < notes.length; i++) if(notes[i].st === no && notes[i].s === s) return notes[i].mark; return ""; };
-  var ranked = sheets.filter(function(s){ return s.ov && /^\d+$/.test(String(s.ov.place)); }).sort(function(a, b){ return +a.ov.place - +b.ov.place || a.sh.name.localeCompare(b.sh.name); });
+  var plOf = function(s){ return ovPl.get(s); };
+  var ranked = sheets.filter(function(s){ return plOf(s) != null; }).sort(function(a, b){ return plOf(a) - plOf(b) || a.sh.name.localeCompare(b.sh.name); });
   var other = sheets.filter(function(s){ return ranked.indexOf(s) < 0; });
   var why = function(s){ return String(s.ov && s.ov.place || ""); };
   var lead = ranked.length ? vpNum(ranked[0].ov.total) : 0, rounds = stages.reduce(function(a, s){ return a + (s.rounds || 0); }, 0);
@@ -364,7 +389,7 @@ function vpModel(m){
   p1.podium = [0, 1, 2].map(function(i){ var r = ranked[i]; return { t: ["1ST", "2ND", "3RD"][i], name: r ? r.sh.name : "-", total: r ? "Total " + vpF2(vpNum(r.ov.total)) + " s" : "" }; });
   p1.heading = "OVERALL RESULTS (sum of Stage " + span + " scores, seconds)";
   p1.stages = stages.map(function(s){ return s.no; });
-  p1.rows = ranked.map(function(s){ var t = vpNum(s.ov.total); return { rank: String(+s.ov.place), name: s.sh.name, bold: true, place: +s.ov.place,
+  p1.rows = ranked.map(function(s){ var t = vpNum(s.ov.total); return { rank: String(plOf(s)), name: s.sh.name, bold: true, place: plOf(s),
     cells: stages.map(function(st){ var r = rowOf(s, st.no); return { t: r ? String(r.score).replace(/ s$/, "") : "-", mark: markOf(st.no, s) }; }), total: vpF2(t), gap: t === lead ? "-" : "+" + vpF2(t - lead) }; });
   var dnfSt = {}; other.forEach(function(s){ var w = /DNF\s*stage\s*(\d+)/i.exec(why(s)); dnfSt[w ? w[1] : "x"] = 1; });
   if(other.length){ var ks = Object.keys(dnfSt); p1.otherHead = (ks.length === 1 && ks[0] !== "x") ? "DNF Stage " + ks[0] + " (not ranked overall)" : "Not ranked overall";
@@ -386,13 +411,16 @@ function vpModel(m){
   var checks = { scored: 0, wrong: [], counts: [], steel: [] };
   stages.forEach(function(st){
     var tot = st.rounds, list = sheets.map(function(s){ return { s: s, r: rowOf(s, st.no) }; }).filter(function(x){ return x.r; });
-    var rk = list.filter(function(x){ return /^\d+$/.test(String(x.r.place)); }).sort(function(a, b){ return +a.r.place - +b.r.place || a.s.sh.name.localeCompare(b.s.sh.name); });
+    var stPl = list.some(function(x){ return num(x.r.place); }) ? new Map(list.filter(function(x){ return num(x.r.place); }).map(function(x){ return [x, +x.r.place]; }))
+      : openRank(list.filter(function(x){ return scoredPl(x.r.place); }), function(x){ return vpNum(x.r.score); });
+    list.forEach(function(x){ x.pl = stPl.get(x); });
+    var rk = list.filter(function(x){ return x.pl != null; }).sort(function(a, b){ return a.pl - b.pl || a.s.sh.name.localeCompare(b.s.sh.name); });
     var oth = list.filter(function(x){ return rk.indexOf(x) < 0; });
-    var steel = list.some(function(x){ return isN(x.r.standing) && x.r.standing > 0; });
+    var steel = list.some(function(x){ return isN(x.r.standing) && x.r.standing > 0; }), cover = list.some(function(x){ return cov(x.r) > 0; });
     var fa = (st.firearms || []).filter(Boolean);
     var desc = tot + " rds" + (fa.length === 1 ? " " + fa[0] : "") + (st.limited ? (fa.length > 1 ? ", limited: " + vpList(fa) : ", limited") : (fa.length > 1 ? ": " + vpList(fa) : "")) + "." + (st.sub ? " " + String(st.sub).replace(/\.?$/, ".") : "");
     if(st.desc) desc = String(st.desc);
-    var pg = { kind: "stage", title: ("Stage " + st.no + "  |  " + (st.title || "")).toUpperCase(), sub: "Stage results  |  Stage score = time + penalty seconds  |  Lowest wins  |  " + tot + " rounds", outline: "Stage " + st.no + " - " + (st.title || ""), desc: desc, steel: steel, rows: [] };
+    var pg = { kind: "stage", title: ("Stage " + st.no + "  |  " + (st.title || "")).toUpperCase(), sub: "Stage results  |  Stage score = time + penalty seconds  |  Lowest wins  |  " + tot + " rounds", outline: "Stage " + st.no + " - " + (st.title || ""), desc: desc, steel: steel, cover: cover, rows: [] };
     var ok = 0, scored = 0, bad = [], seen = {}, ties = [];
     var line = function(x, rank){ var r = x.r, nm = x.s.sh.name, mk = markOf(st.no, x.s);
       if(!isN(r.hz)) return { rank: rank, name: nm, dnf: /DNF/.test(r.score) ? "DID NOT FINISH" : /DQ/.test(r.score) ? "DISQUALIFIED" : String(r.score), score: "-", mark: mk };
@@ -401,11 +429,11 @@ function vpModel(m){
       if(stand) checks.steel.push({ st: st.no, name: nm, n: stand });
       var corr = notes.some(function(n){ return n.corr && n.st === st.no && n.s === x.s; });
       if(!corr && tm != null && sc != null && Math.abs(tm + p - sc) > 0.005) checks.wrong.push("Stage " + st.no + ": " + nm + " stage score " + vpF2(sc) + " differs from time + penalties (" + vpF2(tm + p) + ").");
-      var key = vpF2(sc); if(/^\d+$/.test(String(rank))){ if(seen[key]) ties.push(nm); seen[key] = 1; }
+      var key = vpF2(sc); if(num(rank)){ if(seen[key]) ties.push(nm); seen[key] = 1; }
       var z = function(v){ return v ? String(v) : ""; };
-      return { rank: rank, name: nm, bold: /^\d+$/.test(String(rank)), place: /^\d+$/.test(String(rank)) ? +rank : 0, time: vpF2(tm),
-        vals: [String(r.hz), z(r.pz1), z(r.pz2), z(r.miss - stand), ""].concat(steel ? [z(stand)] : []).concat([z(r.pen), z(r.ns), c + "/" + tot]), pen: vpG(p), score: vpF2(sc), mark: mk }; };
-    rk.forEach(function(x){ pg.rows.push(line(x, String(x.r.place))); });
+      return { rank: rank, name: nm, bold: num(rank), place: num(rank) ? +rank : 0, time: vpF2(tm),
+        vals: [String(r.hz), z(r.pz1), z(r.pz2), z(r.miss - stand), ""].concat(steel ? [z(stand)] : []).concat([z(r.pen), z(r.ns)]).concat(cover ? [cov(x.r) ? "-" + vpG(cov(x.r)) : ""] : []).concat([c + "/" + tot]), pen: vpG(p), score: vpF2(sc), mark: mk }; };
+    rk.forEach(function(x){ pg.rows.push(line(x, String(x.pl))); });
     oth.forEach(function(x){ pg.rows.push(line(x, /DQ/.test(x.r.place) ? "DQ" : /DNF/.test(x.r.place) ? "DNF" : "-")); });
     var expr = "HZ + PZI + PZII + Misses" + (steel ? " + Steel standing" : "");
     var f = "Rounds counted = " + expr + "; expected " + expr + " = " + tot + (st.roundsNote ? " (" + st.roundsNote + ")" : "") + ". " + (bad.length ? "Check: " + bad.join(", ") + ". " : "All " + ok + " of " + scored + " scored shooters total exactly " + tot + ". ") + "Penalty and stage score recalculated for every shooter. " + (ties.length ? "Ties share a rank (" + vpList(ties) + ")." : "Ties would share a rank; there are none.");
@@ -419,12 +447,13 @@ function vpModel(m){
   /* score check */
   var sc = { kind: "check", title: "SCORE CHECK", sub: (paper ? "How the hand-written sheets were verified" : "How the scores were verified") + "  |  Corrections and low-confidence readings", outline: "Score check" };
   var steelSt = stages.filter(function(st){ return sheets.some(function(s){ var r = rowOf(s, st.no); return r && isN(r.standing) && r.standing > 0; }); }).map(function(s){ return s.no; });
+  var coverSt = stages.filter(function(st){ return sheets.some(function(s){ var r = rowOf(s, st.no); return r && cov(r) > 0; }); }).map(function(s){ return s.no; });
   var stWord = stages.length <= 12 ? VP_WORDS[stages.length] : String(stages.length);
   var stList = stages.map(function(s){ return "Stage " + s.no; }).join(" + ");
   sc.method = [
     paper ? "Every hand-written entry on the " + stWord + " stage sheets (Stage " + span + ", " + sheets.length + " shooters) was transcribed into the Spectre Scoring app and checked against the sheet."
           : "Every score on the " + stWord + " stages (Stage " + span + ", " + sheets.length + " shooters) was entered on a scoring phone and stamped with the Range Officer's name.",
-    "Penalty seconds were recalculated for every shooter: (PZI x1) + (PZII x3) + (Misses x7) + (Not engaged x2 misses x7 = x14) + (Steel standing x7" + (steelSt.length ? ", Stage " + vpList(steelSt.map(String)) : "") + ") + (Procedurals x3) + (No-shoot x7). These values are from the rulebook (\u00a74.2.2 p.61-62, \u00a74.2.2.1 p.62, \u00a74.2.4 p.64, \u00a74.4 p.68-69).",
+    "Penalty seconds were recalculated for every shooter: (PZI x1) + (PZII x3) + (Misses x7) + (Not engaged x2 misses x7 = x14) + (Steel standing x7" + (steelSt.length ? ", Stage " + vpList(steelSt.map(String)) : "") + ") + (Procedurals x3) + (No-shoot x7)" + (coverSt.length ? " - (Cover bonus: imperfect 1 s, good 2 s, Stage " + vpList(coverSt.map(String)) + ", \u00a74.2.3)" : "") + ". These values are from the rulebook (\u00a74.2.2 p.61-62, \u00a74.2.2.1 p.62, \u00a74.2.4 p.64, \u00a74.4 p.68-69).",
     "Stage score = time + penalty seconds was recalculated and compared with the scorer's figure. The as-written figure is kept unless the arithmetic is definitely wrong.",
     "The rounds counted per shooter (HZ + PZI + PZII + Misses" + (steelSt.length ? ", plus Steel standing on Stage " + vpList(steelSt.map(String)) : "") + ") were compared with each stage's round count: " + vpList(stages.map(function(s){ return String(s.rounds); })) + ".",
     "Overall total = " + stList + ", lowest wins. A shooter who did not finish a stage is not ranked overall. " + (dq.length ? "A disqualified shooter is removed from the match results (\u00a74.6.3, p.73)." : paper ? "No DQ box is ticked on any sheet (\u00a74.6.3, p.73)." : "No shooter was disqualified (\u00a74.6.3, p.73).")];
@@ -433,9 +462,9 @@ function vpModel(m){
   var eff = [];
   corrs.forEach(function(n){ var s = n.s, t = vpNum(s.ov && s.ov.total), d = n.corr.was - n.corr.now;
     if(t == null){ eff.push("Effect: " + s.sh.name + " is not ranked overall, so the correction only affects the Stage " + n.st + " result."); return; }
-    var asW = t + d, place = +s.ov.place, newPlace = 1 + ranked.filter(function(o){ return o !== s && vpNum(o.ov.total) < asW; }).length;
+    var asW = t + d, place = plOf(s), newPlace = 1 + ranked.filter(function(o){ return o !== s && vpNum(o.ov.total) < asW; }).length;
     var nb = ranked[place - 2], stRow = rowOf(s, n.st);
-    var stRank = stRow && /^\d+$/.test(String(stRow.place)) ? +stRow.place : null;
+    var stRank = stRow && num(stRow.place) ? +stRow.place : null;
     var stAs = stRank ? 1 + sheets.filter(function(o){ var r = rowOf(o, n.st); return o !== s && r && /^\d+$/.test(String(r.place)) && vpNum(r.score) < n.corr.was; }).length : null;
     eff.push("Effect: " + s.sh.name + "'s match total goes from " + vpF2(asW) + " (as written) to " + vpF2(t) + " (corrected). " + (newPlace === place ? "The overall rank is unchanged (" + vpOrd(place) + (nb ? "; " + nb.sh.name + " is " + vpOrd(place - 1) + " on " + vpF2(vpNum(nb.ov.total)) : "") + ")." : "The overall rank changes from " + vpOrd(newPlace) + " (as written) to " + vpOrd(place) + ".") + (stRank ? (stAs === stRank ? " The Stage " + n.st + " rank is also unchanged (" + vpOrd(stRank) + ")." : " The Stage " + n.st + " rank changes from " + vpOrd(stAs) + " to " + vpOrd(stRank) + ".") : "")); });
   var good = checks.scored - corrs.length - checks.wrong.length;
@@ -548,8 +577,8 @@ function vpRender(M, fonts){
       box(L, y, W, bh, VPC.cream); stroke(VPC.gold, 1.0); doc.rect(L, y, W, bh, "S"); ln(L, y, L, y + bh, VPC.gold, 4.0);
       txt("STAGE", 40, y + 13.0, "BarlowCondensed-Bold", 10, VPC.navy); dl.forEach(function(l, i){ txt(l, 96.7, y + 11.6 + i * 10.4, "Barlow-Regular", 8.6, VPC.text); });
       y += bh + 8.5;
-      var nh = pg.steel ? 9 : 8, cw = (653.1 - 310.5) / nh, sc2 = [L, 79.35, 255.1, 310.5]; for(i = 1; i <= nh; i++) sc2.push(310.5 + cw * i); sc2.push(719.5); sc2.push(R);
-      var hd = [{ t: "Rank" }, { t: "Shooter", a: "l" }, { t: "Time (s)" }, { t: "HZ\n+0" }, { t: "PZI\nx1" }, { t: "PZII\nx3" }, { t: "Misses\nx7" }, { t: "Not eng.\nx14" }].concat(pg.steel ? [{ t: "Steel\nstand.\nx7" }] : []).concat([{ t: "Proced.\nx3" }, { t: pg.steel ? "No-sh.\nx7" : "No-shoot\nx7" }, { t: "Rounds\ncounted" }, { t: "Penalty (s)" }, { t: "Stage score (s)" }]);
+      var nh = (pg.steel ? 9 : 8) + (pg.cover ? 1 : 0), cw = (653.1 - 310.5) / nh, sc2 = [L, 79.35, 255.1, 310.5]; for(i = 1; i <= nh; i++) sc2.push(310.5 + cw * i); sc2.push(719.5); sc2.push(R);
+      var hd = [{ t: "Rank" }, { t: "Shooter", a: "l" }, { t: "Time (s)" }, { t: "HZ\n+0" }, { t: "PZI\nx1" }, { t: "PZII\nx3" }, { t: "Misses\nx7" }, { t: "Not eng.\nx14" }].concat(pg.steel ? [{ t: "Steel\nstand.\nx7" }] : []).concat([{ t: "Proced.\nx3" }, { t: pg.steel || pg.cover ? "No-sh.\nx7" : "No-shoot\nx7" }].concat(pg.cover ? [{ t: "Cover\n-1 / -2" }] : []).concat([{ t: "Rounds\ncounted" }, { t: "Penalty (s)" }, { t: "Stage score (s)" }]));
       var srows = pg.rows.map(function(r, i){ var fills = []; if((i + 1) % 2 === 0) fills.push(VPC.zebra); if(r.place >= 1 && r.place <= 3) fills.push([VPC.p1, VPC.p2, VPC.p3][r.place - 1]);
         return { fills: fills, draw: function(ty, h, b){ var f = r.bold ? "Barlow-Bold" : "Barlow-Regular", cc = function(j){ return (sc2[j] + sc2[j + 1]) / 2; };
           txt(r.rank, cc(0), b, f, 8.6, VPC.text, "c"); txt(r.name, sc2[1] + 3.25, b, f, 8.6, VPC.text);
@@ -658,19 +687,21 @@ function vpSheetsRender(m, list, fonts, printed){
     K.info([["Match", mt.name || "", "Date", vpDate(mt.date), "Venue", M.venueFull],
       ["Shooter", (sh.name || "") + (sh.visitor ? "  (visitor)" : ""), "Shooter no.", sh.no || "-", "Squad", sh.squad || "-"],
       ["Match Director", mt.md || "", "Member no.", sh.member || (sh.visitor ? "Visitor" : "-"), "Division", (sh.divs || "") + (sh.cat ? " | " + sh.cat : "")]], ic);
-    K.y += 22; K.heading("STAGE SCORES"); 
-    var hd = [{ t: "Stage", a: "l" }, { t: "HZ\n+0" }, { t: "PZI\nx1" }, { t: "PZII\nx3" }, { t: "Misses\nx7" }, { t: "Steel\nstanding" }, { t: "Proced.\nx3" }, { t: "No-shoot\nx7" }, { t: "Time (s)" }, { t: m.neg === false ? "Penalty\npts" : "Penalty (s)" }, { t: "Stage score" }, { t: "Place" }];
-    var c = [L, 255.1]; for(var i = 0; i < 7; i++) c.push(c[c.length - 1] + 46); c.push(c[c.length - 1] + 62); c.push(c[c.length - 1] + 62); c.push(c[c.length - 1] + 62); c.push(R);
+    K.y += 22; K.heading("STAGE SCORES"); var cvr = m.neg !== false && rows.some(function(r){ return vpCov(r) > 0; });
+    var hd = [{ t: "Stage", a: "l" }, { t: "HZ\n+0" }, { t: "PZI\nx1" }, { t: "PZII\nx3" }, { t: "Misses\nx7" }, { t: "Steel\nstanding" }, { t: "Proced.\nx3" }, { t: "No-shoot\nx7" }].concat(cvr ? [{ t: "Cover\nbonus (s)" }] : []).concat([{ t: "Time (s)" }, { t: m.neg === false ? "Penalty\npts" : "Penalty (s)" }, { t: "Stage score" }, { t: "Place" }]);
+    var c = [L, cvr ? 213.1 : 255.1]; for(var i = 0; i < 7 + (cvr ? 1 : 0); i++) c.push(c[c.length - 1] + (cvr ? 42 : 46)); c.push(c[c.length - 1] + 62); c.push(c[c.length - 1] + 62); c.push(c[c.length - 1] + 62); c.push(R);
     var fns = [];
     var body = [];
     rows.forEach(function(r){ var mk = ""; if(r.note){ fns.push("Stage " + r.no + ": " + r.note); mk = " " + VP_MARKS[fns.length - 1]; }
       var nm = { t: r.no + "  " + (r.title || ""), f: "Barlow-Bold", a: "l" };
-      if(r.none || r.hz == null){ body.push({ cells: [nm, { t: r.cancelled ? "Cancelled - not counted" : r.none ? "Not scored" : String(r.score || "-"), a: "l", f: "Barlow-SemiBold", c: VPC.red }], h: 16 }); }
+      if(r.none || r.hz == null){ body.push({ cells: [nm, { t: r.cancelled ? "Cancelled" : r.none ? "Not scored" : String(r.score || "-"), a: "l", f: "Barlow-SemiBold", c: VPC.red }], h: 16 }); }
       else { var z = function(v){ return v == null || v === "" ? "" : String(v); }, sc = String(r.score || "").replace(/ s$/, "");
-        body.push({ cells: [nm].concat(["hz", "pz1", "pz2", "miss", "standing", "pen", "ns"].map(function(k){ return { t: z(r[k]) }; })).concat([{ t: z(r.time) }, { t: m.neg === false ? z(r.penT) : vpG(r.pz1 + r.pz2 * 3 + r.miss * 7 + (r.standing || 0) * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7) }, { t: sc + mk, f: "Barlow-Bold" }, { t: z(r.place), f: "Barlow-Bold" }]), h: 16,
+        body.push({ cells: [nm].concat(["hz", "pz1", "pz2", "miss", "standing", "pen", "ns"].map(function(k){ return { t: z(r[k]) }; })).concat(cvr ? [{ t: vpCov(r) ? "-" + vpG(vpCov(r)) : "" }] : []).concat([{ t: z(r.time) }, { t: m.neg === false ? z(r.penT) : (typeof r.hz === "number" && vpNum(r.score) != null && vpNum(r.time) != null ? vpG(Math.round((vpNum(r.score) - vpNum(r.time) + vpCov(r)) * 100) / 100) : "-") }, { t: sc + mk, f: "Barlow-Bold" }, { t: z(r.place), f: "Barlow-Bold" }]), h: 16,
           fills: /^[123]$/.test(String(r.place)) ? [[VPC.p1, VPC.p2, VPC.p3][+r.place - 1]] : [] }); }
       if(r.by) body.push({ h: 12.5, draw: function(ty){ K.txt(K.fit((/paper|hand-?written|transcrib/i.test(r.by) ? r.by : "Scored by " + r.by) + (r.at ? " | " + r.at : "") + (r.dev ? " | " + r.dev : ""), "Barlow-Italic", 7.4, K.W - 12), c[1] + 3.2, ty + 8.8, "Barlow-Italic", 7.4, VPC.muted); } }); });
     K.table(c, hd, body, 24.8, 16);
+    if(cvr){ [ "Stage score = time + penalty seconds; penalty = PZI x1 + PZII x3 + misses x7 + procedurals x3 + no-shoots x7 - cover bonus (§4.2.3: imperfect cover 1 s, good cover 2 s).",
+        rows.filter(function(r){ return vpCov(r) > 0; }).map(function(r){ var p = vpNum(r.score) - vpNum(r.time); return "Stage " + r.no + ": " + vpF2(vpNum(r.time)) + " + " + vpG(Math.round((p + vpCov(r)) * 100) / 100) + " penalties - " + vpG(vpCov(r)) + " cover bonus = " + vpF2(vpNum(r.score)) + " s"; }).join(" | ") ].forEach(function(t){ K.y += 10; K.txt(K.fit(t, "Barlow-Regular", 7.6, K.W), L, K.y, "Barlow-Regular", 7.6, VPC.muted); }); }
     var ov = s.ov;
     if(ov){ K.y += 11.3; var bx = [[L, 280.6], [297.6, 544.3]], vals = [["MATCH TOTAL", String(ov.total || "-")], ["OVERALL PLACE", String(ov.place || "-") + (ov.of && /^\d/.test(String(ov.place)) ? " of " + ov.of : "")]];
       vals.forEach(function(v, i){ var x0 = bx[i][0], x1 = bx[i][1], cx = (x0 + x1) / 2; K.box(x0, K.y, x1 - x0, 42, i ? VPC.p2 : VPC.p1); K.stroke(i ? VPC.border : VPC.gold, 1.2); K.doc.rect(x0, K.y, x1 - x0, 42, "S");
@@ -972,8 +1003,8 @@ function seasonPdf(ms, rows, fonts, gen, o){ o=o||{}; var Y=o.year||String(ms[0]
 
 /* ---------- participation summary: one page per shooter ---------- */
 function placing(m, key){ var d=m.data, out=[];
-  if(d.kind!=="results"){ var s=d.sheets.filter(function(x){return nkey(x.sh.name)===key;})[0]; if(!s) return null; var p=/^\d+$/.test(String(s.ov.place));
-    return [{disc:"Overall (all stages)",res:p?String(s.ov.total):"-",pl:p?ordn(+s.ov.place)+" of "+s.ov.of:String(s.ov.place||"Not ranked")}]; }
+  if(d.kind!=="results"){ var s=d.sheets.filter(function(x){return nkey(x.sh.name)===key;})[0]; if(!s) return null; var p=/^\d+/.test(String(s.ov.place)), pn=parseInt(s.ov.place,10), cls=(/\(([^)]+)\)/.exec(String(s.ov.place))||[])[1];
+    return [{disc:"Overall (all stages)",res:p?String(s.ov.total):"-",pl:p?ordn(pn)+(cls?" "+cls:"")+" of "+s.ov.of:String(s.ov.place||"Not ranked")}]; }
   if(d.stageRes){ var rr=d.stageRes.rows, r=rr.filter(function(x){return nkey(x.name)===key;})[0]; if(!r) return null; var ok=rr.filter(function(x){return !x.status;}).sort(function(a,b){return a.total-b.total;});
     return [{disc:"Overall (combined)",res:r.status?"-":f2(r.total)+" s",pl:r.status?r.status:ordn(ok.indexOf(r)+1)+" of "+ok.length}]; }
   d.disciplines.forEach(function(x){ var r=x.rows.filter(function(y){return nkey(y.name)===key;})[0]; if(!r) return; var P=places(x);
@@ -1116,7 +1147,7 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
             roRows(ds[i]).forEach(function(r){ if(r.name.toLowerCase().indexOf(t) < 0 && String(r.src || '').toLowerCase().indexOf(t) < 0) return;
               out.push('<li><div class="grow"><b>' + e(r.name) + '</b><br><span class="small muted">' + e(m.matchName) + ' · ' + e(m.date) + ' · ' + e(r.disc) + ' place ' + e(r.place) + ', ' + e(r.val) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '">Results</a></li>'); });
             ((ds[i] && ds[i].sheets) || []).forEach(function(s){ if((s.sh.name + " " + s.sh.no).toLowerCase().indexOf(t) < 0) return;
-              out.push('<li><div class="grow"><b>' + e(s.sh.name) + '</b><br><span class="small muted">' + e(m.matchName) + ' · ' + e(m.date) + ' · ' + (s.ov && /^\d+$/.test(String(s.ov.place)) ? 'place ' + e(s.ov.place) + ', total ' + e(s.ov.total) : e(s.ov ? s.ov.place : "")) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '&s=' + encodeURIComponent(s.sh.id) + '">View sheet</a></li>'); }); });
+              out.push('<li><div class="grow"><b>' + e(s.sh.name) + '</b><br><span class="small muted">' + e(m.matchName) + ' · ' + e(m.date) + ' · ' + (s.ov && /^\d+/.test(String(s.ov.place)) ? 'place ' + e(s.ov.place) + ', total ' + e(s.ov.total) : e(s.ov ? s.ov.place : "")) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(m.id) + '&s=' + encodeURIComponent(s.sh.id) + '">View sheet</a></li>'); }); });
           hits.innerHTML = out.length ? out.join("") : '<li class="muted">Nothing matches “' + e(t) + '” in ' + (ALLY ? "any year" : e(YEAR)) + '.' + (ALLY ? "" : ' Try “All years”.') + '</li>'; }); };
       inp.oninput = run;
       Array.prototype.forEach.call(document.querySelectorAll('input[name=sc]'), function(r){ r.onchange = function(){ ALLY = r.value === "a"; run(); }; });
@@ -1262,7 +1293,7 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
         '<div class="card row"><a class="btn" href="#m=' + encodeURIComponent(id) + '&r=0">Full results</a><button type="button" id="allPdf">Download all score sheets (PDF)</button><button type="button" id="sqPdf">Squads &amp; range officers (PDF)</button></div>';
       var paint = function(){ var t = document.getElementById("q").value.trim().toLowerCase();
         var rows = m.sheets.filter(function(s){ return !t || (s.sh.name + " " + s.sh.no).toLowerCase().indexOf(t) >= 0; });
-        document.getElementById("shList").innerHTML = rows.length ? rows.map(function(s){ return '<li><div class="grow"><b>' + e(s.sh.name) + '</b> <span class="small muted">' + (s.sh.no ? "#" + e(s.sh.no) + " · " : "") + (s.sh.squad ? "squad " + e(s.sh.squad) + " · " : "") + e(s.sh.divs) + '</span><br><span class="small">' + (s.ov && /^\d+$/.test(String(s.ov.place)) ? 'Total ' + e(s.ov.total) + ' · place ' + e(s.ov.place) : e(s.ov ? s.ov.place : "")) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(id) + '&s=' + encodeURIComponent(s.sh.id) + '">View sheet</a><button type="button" class="primary" data-pdf="' + e(s.sh.id) + '">PDF</button></li>'; }).join("") : '<li class="muted">No shooter matches “' + e(t) + '”.</li>'; };
+        document.getElementById("shList").innerHTML = rows.length ? rows.map(function(s){ return '<li><div class="grow"><b>' + e(s.sh.name) + '</b> <span class="small muted">' + (s.sh.no ? "#" + e(s.sh.no) + " · " : "") + (s.sh.squad ? "squad " + e(s.sh.squad) + " · " : "") + e(s.sh.divs) + '</span><br><span class="small">' + (s.ov && /^\d+/.test(String(s.ov.place)) ? 'Total ' + e(s.ov.total) + ' · place ' + e(s.ov.place) : e(s.ov ? s.ov.place : "")) + '</span></div><a class="btn" href="#m=' + encodeURIComponent(id) + '&s=' + encodeURIComponent(s.sh.id) + '">View sheet</a><button type="button" class="primary" data-pdf="' + e(s.sh.id) + '">PDF</button></li>'; }).join("") : '<li class="muted">No shooter matches “' + e(t) + '”.</li>'; };
       document.getElementById("q").oninput = paint; paint();
       document.getElementById("shList").onclick = function(ev){ var b = ev.target.closest("[data-pdf]"); if(b) pdfSheets(m, m.sheets.filter(function(s){ return s.sh.id === b.dataset.pdf; }), b); };
       document.getElementById("allPdf").onclick = function(){ pdfSheets(m, m.sheets, this); };
