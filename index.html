@@ -1258,7 +1258,11 @@ function loadState(){
 }
 function fixState(o){
   var d = blankState();
-  Object.keys(d).forEach(function(k){ if(o[k] === undefined || o[k] === null) o[k] = d[k]; });
+  Object.keys(d).forEach(function(k){ if(o[k] === undefined || o[k] === null) o[k] = d[k];
+    else if(Array.isArray(d[k]) && !Array.isArray(o[k])) o[k] = d[k];
+    else if(d[k] && typeof d[k] === "object" && !Array.isArray(d[k]) && (typeof o[k] !== "object" || Array.isArray(o[k]))) o[k] = d[k]; });
+  o.stages = o.stages.filter(function(st){ return st && typeof st === "object"; }); o.shooters = o.shooters.filter(function(sh){ return sh && typeof sh === "object" && sh.id; });
+  Object.keys(o.scores).forEach(function(k){ var sc = o.scores[k]; if(!sc || typeof sc !== "object") delete o.scores[k]; });
   o.match = Object.assign(d.match, o.match || {});
   o.device = Object.assign(d.device, o.device || {});
   o.stages = (o.stages || []).map(function(st){ var n = normalizeStage(st); n.no = st.no || 0; return n; });
@@ -1339,7 +1343,7 @@ var COLMAP = [
   ["first", /^(first|first ?name|fname|given ?name|firstname)$/],
   ["last", /^(last|last ?name|lname|surname|family ?name|lastname)$/],
   ["full", /^(name|competitor|shooter|competitor ?name|full ?name)$/],
-  ["member", /^(member ?(#|no\.?|number|id)?|mem ?(#|no)|uspsa( ?#| ?number)?|ipsc ?(#|no|number)|idpa ?(#|no|number)|sapsa ?(#|no|number)|swpc ?(member ?)?(#|no|number)|membership ?(#|no|number)?|member_number|memberno|id ?number)$/],
+  ["member", /^(member ?(#|no\.?|number|id)?|mem ?(#|no)|uspsa( ?#| ?number)?|ipsc ?(#|no|number)|idpa ?(#|no|number)|sapsa ?(#|no|number)|swpc ?(member ?)?(#|no|number)|membership ?(#|no|number)?|member_number|memberno)$/],
   ["d_handgun", /^(handgun|handgun ?division|hg)$/], ["pf_handgun", /^(handgun ?pf|hg ?pf|handgun ?power ?factor)$/],
   ["d_shotgun", /^(shotgun|shotgun ?division|sg)$/], ["d_rifle", /^(rifle|rifle ?division)$/], ["pf_rifle", /^(rifle ?pf|rifle ?power ?factor)$/],
   ["division", /^(division|firearm ?class ?\/ ?division|firearm ?class|class ?\/ ?division|division ?\/ ?class|firearm)$/],
@@ -1377,7 +1381,8 @@ function readShootersCSV(txt){
     var divs = {}; ["handgun","shotgun","rifle"].forEach(function(k){ var v = g("d_" + k); if(!v) return; var c = classCode(v); divs[k] = { c: c, t: c ? "" : v }; if(k !== "shotgun") divs[k].pf = /major/i.test(g("pf_" + k)) ? "major" : "minor"; });
     var dk = Object.keys(divs)[0];
     var div = g("division") || (dk ? (divs[dk].c || divs[dk].t) : ""), cl = g("cls"), code = classCode(div) || classCode(cl);
-    out.push({ divs: dk ? divs : undefined, first: first, last: last, member: g("member"), cls: code, clsText: code ? "" : (div || ""), squad: g("squad"), cat: g("cat"), email: g("email"), visitor: m.visitor === undefined ? undefined : /^(y|yes|true|1|x)$/i.test(g("visitor")), no: parseInt(g("no"), 10) || null });
+    var mem = g("member"); if(/^\d{13}$/.test(mem.replace(/\s/g, ""))) mem = ""; /* privacy: never keep an SA ID number */
+    out.push({ divs: dk ? divs : undefined, first: first, last: last, member: mem, cls: code, clsText: code ? "" : (div || ""), squad: g("squad"), cat: g("cat"), email: g("email"), visitor: m.visitor === undefined ? undefined : /^(y|yes|true|1|x)$/i.test(g("visitor")), no: parseInt(g("no"), 10) || null });
   });
   if(!out.length) throw new Error("No shooters found in the CSV.");
   return out;
@@ -1449,7 +1454,6 @@ function penaltyList(st){
 }
 function coverOn(st){ var m = stageModel(st); return (m === "negative" || m === "positive") && (st.division === "CQ" || !!st.cover); }
 /* no-shoot / hostage hits are always penalised (MD ruling), even when not ticked in the brief */
-function nsOn(st){ return true; }
 
 /* ---- one scoring model per match (MD ruling). Long-Range and QS stages have their own methods and may sit alongside. ---- */
 function mainModels(stages){ var u = {}; stages.forEach(function(st){ var m = stageModel(st); if(m === "negative" || m === "positive") u[m] = 1; }); return Object.keys(u); }
@@ -1474,6 +1478,7 @@ function tgt(sc, id){ var o = sc.targets[id]; if(!o){ o = sc.targets[id] = { hz:
 /* ---- the maths: §4.2.2 zone values, §4.2.4 completion formulas, §4.4 penalties, §4.2.3 cover ----
    counted hits per target = the best `scored` hits (HZ first, then PZI, then PZII); misses = scored − counted.
    Failure to engage = as many misses as the target's required hits (MD ruling: 1-hit steel/slug 1, best 2 = 2, Mozambique 3, fixed N = N, buckshot 2). */
+function nonNeg(v){ v = v | 0; return v > 0 ? v : 0; }
 function calcScore(st, sc){
   var model = stageModel(st), res = { model: model, hz: 0, pz1: 0, pz2: 0, miss: 0, standing: 0, fte: 0, ns: 0, pen: 0, penPts: 0, coverImp: 0, coverGood: 0, errors: [], warnings: [], lines: [], targets: {} };
   /* DQ / DNF: no hit counts – noCounts makes results, print, CSV and score sheets show "–" instead of zeros */
@@ -1494,24 +1499,26 @@ function calcScore(st, sc){
     if(e.fte){ tr.miss = sp.scored; tr.fte = true; res.fte++; }
     else if(sp.kind === "fall"){ if(e.down) tr.hz = 1; else { tr.miss = 1; tr.standing = 1; res.standing++; } }
     else {
-      var hz = e.hz | 0, pz1 = e.pz1 | 0, pz2 = sp.zones.length > 2 ? e.pz2 | 0 : 0, body = sp.kind === "moz" ? 2 : sp.scored;
+      var hz = nonNeg(e.hz), pz1 = nonNeg(e.pz1), pz2 = sp.zones.length > 2 ? nonNeg(e.pz2) : 0, body = sp.kind === "moz" ? 2 : sp.scored;
       var entered = hz + pz1 + pz2;
       if(sp.cap != null && entered > sp.cap) res.errors.push(sp.label + ": " + entered + " " + (sp.kind === "moz" ? "body hits" : sp.unit) + " entered, at most " + sp.cap + " can score here.");
       else if(sp.soft != null && entered > sp.soft) res.warnings.push(sp.label + ": " + entered + " " + sp.unit + " entered – only the best " + sp.soft + " count. Check the hit count.");
       var left = body; tr.hz = Math.min(hz, left); left -= tr.hz; tr.pz1 = Math.min(pz1, left); left -= tr.pz1; tr.pz2 = Math.min(pz2, left); left -= tr.pz2; tr.miss = left;
-      if(sp.kind === "moz"){ var hh = e.hhz | 0, hp = e.hpz | 0; if(hh + hp > 1) res.errors.push(sp.label + ": only 1 head hit can score."); if(hh > 0) tr.hz++; else if(hp > 0) tr.pz1++; else tr.miss++; }
+      if(sp.kind === "moz"){ var hh = nonNeg(e.hhz), hp = nonNeg(e.hpz); if(hh + hp > 1) res.errors.push(sp.label + ": only 1 head hit can score."); if(hh > 0) tr.hz++; else if(hp > 0) tr.pz1++; else tr.miss++; }
     }
     res.hz += tr.hz; res.pz1 += tr.pz1; res.pz2 += tr.pz2; res.miss += tr.miss; res.targets[t.id] = tr;
   });
-  noShoots(st).forEach(function(n){ var h = (sc.ns && sc.ns[n.id]) | 0; res.ns += h; });
-  penaltyList(st).forEach(function(p){ var n = (sc.pens && sc.pens[p.k]) | 0; if(n && p.on) res.pen += n; if(n && !p.on) res.warnings.push(p.n + " penalties were not briefed – not applied (§4.4.5)."); });
-  if(coverOn(st)){ res.coverImp = (sc.cover && sc.cover.imp) | 0; res.coverGood = (sc.cover && sc.cover.good) | 0; }
+  noShoots(st).forEach(function(n){ var h = nonNeg(sc.ns && sc.ns[n.id]); res.ns += h; });
+  penaltyList(st).forEach(function(p){ var n = nonNeg(sc.pens && sc.pens[p.k]); if(n && p.on) res.pen += n; if(n && !p.on) res.warnings.push(p.n + " penalties were not briefed – not applied (§4.4.5)."); });
+  if(coverOn(st)){ res.coverImp = nonNeg(sc.cover && sc.cover.imp); res.coverGood = nonNeg(sc.cover && sc.cover.good); 
+    var nT = stageTargets(st).length; if(res.coverImp + res.coverGood > nT) res.warnings.push("Cover bonus entered " + (res.coverImp + res.coverGood) + " times on a stage with " + nT + " target" + (nT === 1 ? "" : "s") + " – check the count."); }
   var neg = model === "negative";
   if(neg){
     if(!(sc.time > 0)) res.errors.push("Enter the time.");
     var t0 = sc.time > 0 ? +sc.time : 0;
     res.added = res.pz1 * 1 + res.pz2 * 3 + res.miss * 7 + res.pen * 3 + res.ns * 7 - res.coverImp * 1 - res.coverGood * 2;
     res.total = r2(t0 + res.added); res.time = sc.time;
+    if(sc.time > 0 && res.total < 0) res.errors.push("Cover bonus is bigger than the whole stage time – check the cover counts.");
   } else {
     res.total = res.hz * 7 + res.pz1 * 3 + res.pz2 * 1 - res.miss * 7 - res.pen * 3 - res.ns * 7 + res.coverImp * 3 + res.coverGood * 6;
     res.time = sc.time; res.overPar = st.parTime && sc.time ? sc.time > st.parTime : false;
@@ -1628,7 +1635,7 @@ function scoreOf(stId, shId){ var sc = S.scores[skey(stId, shId)]; if(sc) return
 function isMatchDQ(shId){ return !!dqOf(shId); }
 function matchFirearms(){ var u = {}; liveStages().forEach(function(st){ usedFirearmTypes(st).forEach(function(f){ u[f] = 1; }); }); return FA_ORDER.filter(function(f){ return u[f]; }); }
 function isMultiGun(){ return matchFirearms().length > 1; }
-/* one plain open ranking everywhere (class ranking removed, Nov 2026) */
+/* one plain open ranking everywhere (class ranking removed, Oct 2026) */
 function stageOpen(st){ return true; }
 function stageFirearm(st){ var u = usedFirearmTypes(st); return u.length === 1 ? u[0] : null; }
 function matchFirearm(){ var f = matchFirearms(); return f.length === 1 ? f[0] : null; }
@@ -1674,7 +1681,7 @@ function countedStages(fa){
 }
 function firearmOveralls(){ if(!isMultiGun()) return []; return matchFirearms().filter(function(f){ return countedStages(f).length > 0; }); }
 function matchResults(open, fa){
-  var method = matchMethod(), stages = method === "mixed" ? [] : countedStages(fa), multi = isMultiGun();
+  var method = matchMethod(), stages = method === "mixed" ? [] : countedStages(fa);
   open = true;
   var g = groupsFor(S.shooters, open, fa || matchFirearm()), out = { method: method, open: open, fa: fa || null, stages: stages, groups: [] };
   groupOrder(Object.keys(g)).forEach(function(name){
@@ -1705,7 +1712,6 @@ function matchResults(open, fa){
   return out;
 }
 function totalText(method, r){ return method === "time" ? f2(r.total) + " s" : method === "points" ? r.total + " pts" : method === "lr" ? r.hits + " hits / " + r.shots + " shots · " + f2(r.time) + " s" : ""; }
-function hasOpenStage(){ return isMultiGun(); }
 /* the overall result views for the current match */
 function overallViews(){
   var v = [];
@@ -1718,7 +1724,7 @@ function viewTitle(v){ return v.fa ? FN(v.fa) + " overall – " + FN(v.fa).toLow
 /* hit-count cell: "–" for DNF / DQ (no counts), else the number */
 function cnt(x, k){ return !x || x.noCounts || x[k] == null ? "–" : x[k]; }
 /* ---------------- CSV export ---------------- */
-function csvCell(v){ v = v == null ? "" : String(v); return /[",;\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+function csvCell(v){ v = v == null ? "" : String(v); if(/^[=+\-@\t\r]/.test(v) && !/^[+\-]?\d+([.,]\d+)?( s| pts)?$/.test(v)) v = "'" + v; /* spreadsheet formula injection */ return /[",;\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 function csvRows(rows){ return rows.map(function(r){ return r.map(csvCell).join(","); }).join("\r\n") + "\r\n"; }
 function resultsCSV(){
   var rows = [["Spectre Scoring – " + S.match.name + " – " + S.match.date + " – " + S.match.venue], ["Match Director: " + S.match.md, "Scoring model: " + (matchModel() || "–"), "Open ranking (all competitors)"], []];
@@ -1790,7 +1796,7 @@ function packBase(kind){ return { app: SS_APP, kind: kind, version: SS_SCHEMA, a
 function makeStagePack(stageIds, forName){
   var p = packBase("stagepack"); p.forDevice = forName || ""; p.assigned = stageIds.slice();
   p.stages = S.stages.filter(function(s){ return stageIds.indexOf(s.id) >= 0; });
-  p.shooters = S.shooters; return p;
+  p.shooters = S.shooters.map(function(sh){ var c = clone(sh); delete c.email; return c; }); /* privacy: RO phones / live rooms never get e-mails */ return p;
 }
 /* RO phone → main phone: all scores this phone holds for its stages */
 function makeScoresPack(withSigs){
