@@ -1766,7 +1766,18 @@ function cmpStage(model){
   return function(a, b){ return ((a.res.overPar ? 1 : 0) - (b.res.overPar ? 1 : 0)) || (b.res.hits - a.res.hits) || (a.res.shots - b.res.shots) || ((a.res.time || 1e9) - (b.res.time || 1e9)); };
 }
 function placeAll(rows, model){ var c = cmpStage(model); rows.sort(c); rows.forEach(function(r, i){ r.place = i && c(rows[i - 1], r) === 0 ? rows[i - 1].place : i + 1; }); return rows; }
-function dqOf(shId){ var k = Object.keys(S.scores).filter(function(k){ return S.scores[k].shooter === shId && S.scores[k].dq; })[0]; return k ? S.scores[k] : null; }
+/* match DQ: a DQ entered on ANY stage disqualifies the shooter for the whole match. The source is the DQ on the earliest stage (stage order,
+   so every phone picks the same one). Nothing is written for the other stages: they are derived (scoreOf), so undoing the DQ clears them,
+   separately entered stage DQs stay (they are real scores), and synced phones never get extra writes or conflicts. */
+function dqOf(shId){ var best = null, bi = 1e9;
+  Object.keys(S.scores).forEach(function(k){ var sc = S.scores[k]; if(sc.shooter !== shId || !sc.dq) return; var i = S.stages.findIndex(function(s){ return s.id === sc.stage; }); if(i < 0) i = 1e8;
+    if(i < bi || (i === bi && String(k) < String(best.key))){ bi = i; best = sc; } });
+  return best; }
+function dqStageNo(dq){ var st = dq && stageById(dq.auto ? dq.src : dq.stage); return st ? st.no : "?"; }
+function dqSrcText(dq){ return "DQ on stage " + dqStageNo(dq) + (dq.dqReason ? ": " + dq.dqReason : ""); }
+/* the score to SHOW for a shooter on a stage: the real one, else (match DQ) a derived, never-saved DQ marked auto */
+function scoreOf(stId, shId){ var sc = S.scores[skey(stId, shId)]; if(sc) return sc; var dq = dqOf(shId); if(!dq) return null;
+  return { key: skey(stId, shId), stage: stId, shooter: shId, auto: true, src: dq.stage, time: null, targets: {}, ns: {}, pens: {}, cover: { imp: 0, good: 0 }, dnf: false, dq: true, dqReason: dq.dqReason || "", qs: { pts: null, pass: null }, signed: false, sig: false, device: "", deviceId: "", at: dq.at || null, rev: 0, history: [] }; }
 function isMatchDQ(shId){ return !!dqOf(shId); }
 function matchFirearms(){ var u = {}; S.stages.forEach(function(st){ usedFirearmTypes(st).forEach(function(f){ u[f] = 1; }); }); return FA_ORDER.filter(function(f){ return u[f]; }); }
 function isMultiGun(){ return S.stages.some(function(st){ return stageRanking(st) === "open"; }) || matchFirearms().length > 1; }
@@ -1785,10 +1796,11 @@ function stageResults(st, forceOpen){
   groupOrder(Object.keys(g)).forEach(function(name){
     var rows = [], other = [];
     g[name].forEach(function(sh){
-      var sc = S.scores[skey(st.id, sh.id)]; if(!sc) return;
+      var sc = scoreOf(st.id, sh.id); if(!sc) return;
       var res = calcScore(st, sc), dq = dqOf(sh.id);
-      if(sc.dq) other.push({ sh: sh, sc: sc, res: res, why: "DQ" + (sc.dqReason ? ": " + sc.dqReason : "") });
-      else if(dq && Array.isArray(dq.dqBefore) && dq.dqBefore.indexOf(st.id) < 0) other.push({ sh: sh, sc: sc, res: res, why: "After DQ (not ranked)" });
+      if(sc.auto) other.push({ sh: sh, sc: sc, res: res, auto: true, why: dqSrcText(dq) });
+      else if(sc.dq) other.push({ sh: sh, sc: sc, res: res, why: "DQ" + (sc.dqReason ? ": " + sc.dqReason : "") });
+      else if(dq && Array.isArray(dq.dqBefore) && dq.dqBefore.indexOf(st.id) < 0) other.push({ sh: sh, sc: sc, res: res, why: "After DQ on stage " + dqStageNo(dq) + " (not ranked)" });
       else if(res.dnf) other.push({ sh: sh, sc: sc, res: res, why: "DNF" });
       else if(model === "qs") other.push({ sh: sh, sc: sc, res: res, why: res.pass ? "PASS" : "FAIL" });
       else if(res.errors.length) other.push({ sh: sh, sc: sc, res: res, why: "Incomplete: " + res.errors[0] });
@@ -1822,7 +1834,7 @@ function matchResults(open, fa){
       var cells = [], tot = 0, hz = 0, hits = 0, shots = 0, time = 0, over = 0, bad = "", dq = dqOf(sh.id);
       if(dq) bad = "DQ" + (dq.dqReason ? ": " + dq.dqReason : "");
       stages.forEach(function(st){
-        var sc = S.scores[skey(st.id, sh.id)];
+        var sc = scoreOf(st.id, sh.id);
         if(!sc){ cells.push({ txt: "–" }); if(!bad) bad = "Not scored on stage " + st.no; return; }
         var res = calcScore(st, sc);
         if(res.dq){ cells.push({ txt: "DQ" }); return; }
@@ -2059,6 +2071,11 @@ function ask(msg, o){
   });
 }
 function alertMsg(msg){ return ask(msg, { cancel: false }); }
+/* safety net: native dialogs are never used (mobile browsers offer to suppress them after a few, which silently breaks buttons);
+   anything that still calls them (e.g. a bundled library) gets the in-app modal instead */
+window.alert = function(m){ alertMsg(String(m == null ? "" : m)); };
+window.confirm = function(m){ console.warn("native confirm() blocked – use ask():", m); return false; };
+window.prompt = function(m){ console.warn("native prompt() blocked – use ask():", m); return null; };
 function setTab(t){ if(t !== U.tab && typeof SEL !== "undefined") SEL = null; U.tab = t; if(t === "score" && U.screen !== "entry" && U.screen !== "confirm") U.screen = U.stage ? "shooters" : "stages"; render(); window.scrollTo(0, 0); }
 function render(){
   document.body.classList.toggle("dark", !!PREFS.dark); document.body.classList.toggle("big", !!PREFS.big);
@@ -2079,7 +2096,7 @@ function stageChips(st){
     '<span class="chip">' + tot.rounds + (tot.fixed ? "" : "+") + ' rds</span>' + (st.limited ? '<span class="chip">Limited</span>' : '<span class="chip">Unlimited</span>') + (st.parTime ? '<span class="chip">Par ' + st.parTime + ' s</span>' : "") +
     '<span class="chip">' + st.firearms.map(FN).join(" + ") + '</span>';
 }
-function scoredCount(st){ return S.shooters.filter(function(sh){ return S.scores[skey(st.id, sh.id)]; }).length; }
+function scoredCount(st){ return S.shooters.filter(function(sh){ return scoreOf(st.id, sh.id); }).length; }
 
 /* ---------- Score tab: 1. stage select ---------- */
 function renderStages(){
@@ -2098,7 +2115,7 @@ function renderStages(){
 function nextUp(st){
   var order = squadSorted(S.shooters), last = -1;
   order.forEach(function(sh, i){ var sc = S.scores[skey(st.id, sh.id)]; if(sc && sc.at && (last < 0 || sc.at >= S.scores[skey(st.id, order[last].id)].at)) last = i; });
-  for(var j = 1; j <= order.length; j++){ var c = order[(last + j) % order.length]; if(!S.scores[skey(st.id, c.id)]) return c; }
+  for(var j = 1; j <= order.length; j++){ var c = order[(last + j) % order.length]; if(!scoreOf(st.id, c.id)) return c; }
   return null;
 }
 function renderPick(){
@@ -2111,8 +2128,8 @@ function renderPick(){
   order.forEach(function(sh){
     if(f && shName(sh).toLowerCase().indexOf(f) < 0) return;
     if((sh.squad || "") !== squad){ squad = sh.squad || ""; h += '<h3 style="margin-top:12px">' + (squad ? "Squad " + esc(squad) : "No squad") + '</h3>'; }
-    var sc = S.scores[skey(st.id, sh.id)], res = sc ? calcScore(st, sc) : null;
-    h += '<button type="button" class="shrow' + (sc ? " done" : "") + (nx && nx.id === sh.id ? " next" : "") + '" data-shooter="' + sh.id + '"><span class="nm"><b>' + esc(shName(sh)) + '</b><span class="small muted">' + esc(divLabelFor(sh, stageFirearm(st)) || clsLabel(sh)) + (pfFor(sh, stageFirearm(st)) ? " " + esc(pfFor(sh, stageFirearm(st))) : "") + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.no ? " · #" + sh.no : "") + '</span></span><span class="sc">' + (sc ? esc(scoreText(st, res)) + (sc.history && sc.history.length ? ' <span class="chip warn">edited</span>' : "") : (nx && nx.id === sh.id ? '<span class="chip warn">Next</span>' : "–")) + '</span></button>';
+    var sc = scoreOf(st.id, sh.id), res = sc ? calcScore(st, sc) : null;
+    h += '<button type="button" class="shrow' + (sc ? " done" : "") + (nx && nx.id === sh.id ? " next" : "") + '" data-shooter="' + sh.id + '"><span class="nm"><b>' + esc(shName(sh)) + '</b><span class="small muted">' + esc(divLabelFor(sh, stageFirearm(st)) || clsLabel(sh)) + (pfFor(sh, stageFirearm(st)) ? " " + esc(pfFor(sh, stageFirearm(st))) : "") + (sh.cat ? " · " + esc(sh.cat) : "") + (sh.no ? " · #" + sh.no : "") + '</span></span><span class="sc">' + (sc ? esc(scoreText(st, res)) + (sc.auto ? ' <span class="chip">auto · stage ' + esc(dqStageNo({ stage: sc.src })) + '</span>' : "") + (sc.history && sc.history.length ? ' <span class="chip warn">edited</span>' : "") : (nx && nx.id === sh.id ? '<span class="chip warn">Next</span>' : "–")) + '</span></button>';
   });
   if(!order.length) h += '<div class="msg warn">No shooters. Add them on the Shooters tab.</div>';
   h += '<div class="nextbar">' + (nx ? '<button type="button" class="primary" data-shooter="' + nx.id + '" id="btnNext">Next up: ' + esc(shName(nx)) + ' ›</button>' : (order.length ? '<div class="msg ok">Everyone is scored on this stage ✓</div>' : "")) + '</div>';
@@ -2140,6 +2157,7 @@ function renderEntry(){
   var st = stageById(U.stage), sh = shooterById(U.shooter), sc = U.draft; if(!st || !sh || !sc){ U.screen = "stages"; return render(); }
   var res = calcScore(st, sc), model = res.model, h = "";
   h += '<div class="ehead"><div class="row"><button type="button" class="slim" data-act="back">‹</button><div class="grow"><div class="who">' + esc(shName(sh)) + '</div><div class="small muted">Stage ' + st.no + ' – ' + esc(st.title) + ' · ' + esc(divLabelFor(sh, stageFirearm(st)) || clsLabel(sh)) + (pfFor(sh, stageFirearm(st)) ? " " + esc(pfFor(sh, stageFirearm(st))) : "") + (U.editing ? ' · <b style="color:var(--warn)">editing saved score</b>' : "") + '</div></div></div></div>';
+  if(!sc.dq && isMatchDQ(sc.shooter)) h += '<div class="msg bad">Already disqualified (' + esc(dqSrcText(dqOf(sc.shooter))) + '). This stage shows DQ automatically – nothing needs scoring here; a score saved anyway is kept but not ranked.</div>';
   if(sc.dq) h += '<div class="msg bad">DISQUALIFIED' + (sc.dqReason ? ": " + esc(sc.dqReason) : "") + ' – the DQ applies to the whole match; the shooter is not ranked (§4.6, p.73).</div><button type="button" class="wide" data-act="undq">Remove DQ</button>';
   else if(sc.dnf) h += '<div class="msg warn">DID NOT FINISH this stage – no stage score; not ranked overall.</div><button type="button" class="wide" data-act="undnf">Remove DNF</button>';
   else {
@@ -3324,7 +3342,7 @@ function packHTML(){
   c += '<h3 class="pkh3">Method</h3><ul class="pkul"><li>Every score was entered on a scoring phone and stamped with the Range Officer’s name and time.</li><li>Penalty seconds were recalculated for every shooter: (PZI x1) + (PZII x3) + (Misses x7) + (Not engaged x2 misses x7 = x14) + (Steel standing x7) + (Procedurals x3) + (No-shoot x7). These values are from the rulebook (§4.2.2 p.61-62, §4.2.2.1 p.62, §4.2.4 p.64, §4.4 p.68-69).</li><li>Stage score = time + penalty seconds. All rounds count.</li><li>The rounds counted per shooter were compared with each stage’s round count: ' + stages.map(function(s){ return stageTotal(s).rounds; }).join(", ") + '.</li><li>Overall total = sum of stage scores, lowest wins; ties go to most HZ hits. A shooter who did not finish a stage is not ranked overall. A disqualified shooter is removed from the match results (§4.6).</li><li>From app data only the arithmetic can be checked, not a hand-written sheet.</li></ul>';
   c += '<h3 class="pkh3">Notes and corrections</h3>' + (NL.length ? '<table class="pktab"><tr><th>#</th><th class="l">Stage</th><th class="l">Shooter</th><th>Stage score (s)</th><th class="l">Note</th></tr>' + NL.map(function(x, i){ var sc = S.scores[skey(x.st.id, x.sh.id)]; return '<tr><td>' + (i + 1) + '</td><td class="l">Stage ' + x.st.no + '</td><td class="l">' + e(shName(x.sh)) + '</td><td>' + (sc ? e(scoreText(x.st, calcScore(x.st, sc)).replace(/ s$/, "")) : "–") + '</td><td class="l wrap">' + e(x.text) + '</td></tr>'; }).join("") + '</table>' : '<p>No notes or corrections were recorded.</p>');
   var qs = [];
-  stages.forEach(function(st){ S.shooters.forEach(function(sh){ var sc = S.scores[skey(st.id, sh.id)]; if(!sc){ qs.push("Stage " + st.no + ": no score for " + shName(sh) + "."); return; } var x = calcScore(st, sc); if(x.dnf) qs.push("Stage " + st.no + ": " + shName(sh) + " did not finish (DNF)."); else if(!x.noCounts){ var b = pkBreak(st, sc); if(b.rounds !== stageTotal(st).rounds) qs.push("Stage " + st.no + ": " + shName(sh) + " has " + b.rounds + " rounds counted, expected " + stageTotal(st).rounds + "."); if(Math.abs(b.score - x.total) > 0.005) qs.push("Stage " + st.no + ": " + shName(sh) + " stage score differs from the recalculation."); } }); });
+  stages.forEach(function(st){ S.shooters.forEach(function(sh){ var sc = scoreOf(st.id, sh.id); if(!sc){ qs.push("Stage " + st.no + ": no score for " + shName(sh) + "."); return; } var x = calcScore(st, sc); if(x.dnf) qs.push("Stage " + st.no + ": " + shName(sh) + " did not finish (DNF)."); else if(!x.noCounts){ var b = pkBreak(st, sc); if(b.rounds !== stageTotal(st).rounds) qs.push("Stage " + st.no + ": " + shName(sh) + " has " + b.rounds + " rounds counted, expected " + stageTotal(st).rounds + "."); if(Math.abs(b.score - x.total) > 0.005) qs.push("Stage " + st.no + ": " + shName(sh) + " stage score differs from the recalculation."); } }); });
   if(S.conflicts.length) qs.push(S.conflicts.length + " unresolved merge conflict(s) on the main phone.");
   c += '<h3 class="pkh3">Queries for the match director</h3><ul class="pkul">' + (qs.length ? qs.map(function(t){ return '<li>' + e(t) + '</li>'; }).join("") : '<li>None: every scored shooter’s tally adds up to the stage round count and every stage score matches the recalculation.</li>') + '</ul>';
   page(c);
@@ -3461,13 +3479,13 @@ function sheetData(sh){
     ov: ov ? { total: ov.total, place: String(ov.place), of: ov.of || 0, label: ov.label } : null, rows: [] };
   var vt = S.archive && S.archive.id && !S.archive.hidden && S.archive.tok && S.archive.tok[sh.id]; if(vt) d.vt = vt;
   S.stages.forEach(function(st){
-    var sc = S.scores[skey(st.id, sh.id)];
+    var sc = scoreOf(st.id, sh.id);
     var nt = scoreNote(st.id, sh.id);
     if(!sc){ d.rows.push({ no: st.no, title: st.title, none: true, note: nt }); return; }
     var x = calcScore(st, sc), lr = x.model === "lr" || x.model === "qs", z = function(k){ return x.noCounts || lr ? "–" : x[k]; };
     /* penalties: what misses, procedurals and no-shoots cost, less any cover bonus (negative: seconds added; positive: points off) */
     var penT = x.noCounts || lr ? "–" : neg ? f2(x.miss * 7 + x.pen * 3 + x.ns * 7 - x.coverImp - x.coverGood * 2) : String(-(x.miss * 7 + x.pen * 3 + x.ns * 7) + x.coverImp * 3 + x.coverGood * 6);
-    var b = scoredByOf(sc);
+    var b = sc.auto ? { name: "Auto: " + dqSrcText(sc), device: "", at: null } : scoredByOf(sc);
     d.rows.push({ no: st.no, title: st.title, hz: z("hz"), pz1: z("pz1"), pz2: z("pz2"), miss: z("miss"), standing: z("standing"), pen: z("pen"), ns: z("ns"),
       time: sc.time != null && !x.noCounts ? f2(sc.time) : "–", penT: penT, score: scoreText(st, x), place: sheetStagePlace(stageResults(st), sh.id),
       by: b.name, dev: b.device && b.device !== b.name ? b.device : "", at: sheetAt(b.at), sigKey: sc.sig ? sc.key + "#" + sc.rev : "", note: nt });
@@ -3535,7 +3553,7 @@ function archiveCheckPub(){
 }
 /* scoring progress: every shooter × every stage */
 function archiveProgress(){ var need = S.shooters.length * S.stages.length, done = 0;
-  S.stages.forEach(function(st){ S.shooters.forEach(function(sh){ if(S.scores[skey(st.id, sh.id)]) done++; }); });
+  S.stages.forEach(function(st){ S.shooters.forEach(function(sh){ if(scoreOf(st.id, sh.id)) done++; }); });
   return { need: need, done: done, complete: need > 0 && done >= need }; }
 /* same club shoot already in the archive (published from another phone / the box)? → update that entry instead of a duplicate */
 function archiveFindExisting(t){

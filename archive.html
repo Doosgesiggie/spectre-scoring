@@ -53,6 +53,7 @@ ul.shooters li{border-top:1px solid var(--border);padding:8px 0;display:flex;gap
 #packStage .pkqr{position:absolute;right:0;bottom:1mm;width:22mm;text-align:center;font-size:6.5pt;line-height:1.2;color:#333}
 #packStage .pkqr .spqr{display:block;width:22mm;height:22mm}
 @container (max-height:31mm){#packStage .pkqr{display:none}}
+.btn.danger{background:#b3261e;border-color:#b3261e;color:#fff}
 .packbtn{display:block;width:100%;margin:0;padding:14px 16px;border-radius:10px;border:0;background:#d6a92a;color:#14284b;font-weight:800;font-size:1.05em;text-align:center;cursor:pointer}
 .packbtn small{display:block;font-weight:500;font-size:.78em;margin-top:2px}
       .pkhead{display:flex;justify-content:space-between;align-items:flex-end;background:#14284b;color:#fff;padding:2.5mm 4mm 2mm;border-left:2.2mm solid #d6a92a;margin-bottom:3mm}
@@ -200,6 +201,43 @@ var SS_FIREBASE_CONFIG = {
 };
 var SS_FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.14.1/"; /* modular ESM, loaded only when live sync is switched on */
 /* ========================================================================== */
+
+/* In-app dialogs (archive / register / verify pages): promise-based replacements for alert / confirm / prompt.
+   Native dialogs are never used: after a few, mobile browsers offer "Prevent this page from creating additional dialogs",
+   and once ticked every later alert/confirm silently fails and buttons stop working until a reload. Works offline (no assets). */
+(function(){
+  var Q = Promise.resolve(), css = false;
+  function addCss(){ if(css) return; css = true; var s = document.createElement("style");
+    s.textContent = ".ssdlg-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px}" +
+      ".ssdlg{background:#fff;color:#111;border-radius:12px;max-width:440px;width:100%;padding:18px 18px 14px;box-shadow:0 10px 40px rgba(0,0,0,.4);font:16px/1.4 system-ui,Arial,sans-serif}" +
+      ".ssdlg p{margin:0 0 14px;white-space:pre-wrap}.ssdlg input{width:100%;box-sizing:border-box;font-size:16px;padding:9px;margin:0 0 14px;border:1px solid #888;border-radius:8px}" +
+      ".ssdlg .b{display:flex;gap:10px;justify-content:flex-end}.ssdlg button{font-size:16px;padding:10px 16px;border-radius:8px;border:1px solid #14284b;background:#fff;color:#14284b;min-height:44px}" +
+      ".ssdlg button.ok{background:#14284b;color:#fff}.ssdlg button.ok.danger{background:#b3261e;border-color:#b3261e}@media print{.ssdlg-bg{display:none}}";
+    document.head.appendChild(s); }
+  function show(kind, msg, o){ o = o || {};
+    var run = function(){ return new Promise(function(res){ addCss();
+      var prev = document.activeElement, bg = document.createElement("div"), id = "ssdlg" + Date.now();
+      bg.className = "ssdlg-bg"; bg.innerHTML = '<div class="ssdlg" role="' + (kind === "alert" ? "alertdialog" : "dialog") + '" aria-modal="true" aria-labelledby="' + id + '"><p id="' + id + '"></p>' +
+        (kind === "prompt" ? '<input type="text" aria-labelledby="' + id + '">' : "") + '<div class="b">' + (kind === "alert" ? "" : '<button type="button" class="no"></button>') + '<button type="button" class="ok"></button></div></div>';
+      bg.querySelector("p").textContent = String(msg == null ? "" : msg);
+      var ok = bg.querySelector(".ok"), no = bg.querySelector(".no"), inp = bg.querySelector("input");
+      ok.textContent = o.ok || "OK"; if(o.danger) ok.className += " danger"; if(no) no.textContent = o.cancel || "Cancel"; if(inp) inp.value = o.value || "";
+      function done(v){ document.removeEventListener("keydown", key, true); bg.remove(); try{ prev && prev.focus && prev.focus(); }catch(e){} res(v); }
+      function key(ev){ if(ev.key === "Escape"){ ev.preventDefault(); done(kind === "alert" ? undefined : kind === "prompt" ? null : false); }
+        else if(ev.key === "Enter" && (ev.target === inp || ev.target === ok)){ ev.preventDefault(); ok.click(); }
+        else if(ev.key === "Tab"){ var f = [inp, no, ok].filter(Boolean), i = f.indexOf(document.activeElement); ev.preventDefault(); f[(i + (ev.shiftKey ? f.length - 1 : 1)) % f.length].focus(); } }
+      ok.onclick = function(){ done(kind === "alert" ? undefined : kind === "prompt" ? inp.value : true); };
+      if(no) no.onclick = function(){ done(kind === "prompt" ? null : false); };
+      document.addEventListener("keydown", key, true); document.body.appendChild(bg); (inp || ok).focus(); }); };
+    var p = Q.then(run); Q = p.then(function(){}, function(){}); return p; }   /* one at a time, in call order */
+  window.uiAlert = function(m, o){ return show("alert", m, o); };
+  window.uiConfirm = function(m, o){ return show("confirm", m, o); };
+  window.uiPrompt = function(m, v, o){ o = o || {}; o.value = v; return show("prompt", m, o); };
+  /* safety net: anything (incl. bundled libraries) that still calls the natives gets the in-app dialog instead */
+  window.alert = function(m){ uiAlert(m); };
+  window.confirm = function(m){ console.warn("native confirm() blocked – use uiConfirm:", m); return false; };
+  window.prompt = function(m){ console.warn("native prompt() blocked – use uiPrompt:", m); return null; };
+})();
 
 </script>
 <script>
@@ -1001,12 +1039,12 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
         return '<tr data-uid="' + e(u.uid) + '"><td>' + e(u.first + " " + u.last) + '</td><td>' + e(u.email) + '</td><td>' + e(String(u.createdAt || "").slice(0, 10)) + '</td><td>' + (u.approved ? '<span class="chip ok">Approved</span>' : '<span class="chip warn">Waiting</span>') + '</td><td>' + (u.approved ? '<input class="mem-n" value="' + e(u.shooterName || "") + '" placeholder="as on results" style="width:11em"> <button type="button" class="slim mem-l">Link</button>' : "") + '</td><td>' + (u.uid === ME.user.uid ? "" : '<button type="button" class="slim mem-b" data-a="' + (u.approved ? 0 : 1) + '">' + (u.approved ? "Revoke" : "Approve") + '</button>') + '</td></tr>'; }).join("") + '</table></div>';
       Array.prototype.forEach.call(document.querySelectorAll(".mem-b"), function(b){ b.onclick = function(){
         var uid = b.closest("tr").getAttribute("data-uid"), ok = b.getAttribute("data-a") === "1"; b.disabled = true;
-        F.updateDoc(F.doc(db, "users", uid), { approved: ok, approvedBy: String(ME.prof ? ME.prof.first + " " + ME.prof.last : ME.user.email).slice(0, 79), approvedAt: new Date().toISOString() }).then(showAdmin, function(er){ alert("Could not save: " + (er && er.message || er)); b.disabled = false; }); }; });
+        F.updateDoc(F.doc(db, "users", uid), { approved: ok, approvedBy: String(ME.prof ? ME.prof.first + " " + ME.prof.last : ME.user.email).slice(0, 79), approvedAt: new Date().toISOString() }).then(showAdmin, function(er){ uiAlert("Could not save: " + (er && er.message || er)); b.disabled = false; }); }; });
       /* admin-only link of an account to the name used on the results sheets (members cannot set this themselves: firestore.rules) */
       Array.prototype.forEach.call(document.querySelectorAll(".mem-l"), function(b){ b.onclick = function(){
         var tr = b.closest("tr"), nm = tr.querySelector(".mem-n").value.replace(/\s+/g, " ").trim().slice(0, 80); b.disabled = true;
         F.updateDoc(F.doc(db, "users", tr.getAttribute("data-uid")), { shooterName: nm, shooterLinkedBy: String(ME.prof ? ME.prof.first + " " + ME.prof.last : "admin").slice(0, 79), shooterLinkedAt: new Date().toISOString() })
-          .then(showAdmin, function(er){ alert("Could not save: " + (er && er.message || er)); b.disabled = false; }); }; });
+          .then(showAdmin, function(er){ uiAlert("Could not save: " + (er && er.message || er)); b.disabled = false; }); }; });
     }).catch(fail);
   }
   function hash(){ var o = {}; location.hash.replace(/^#/, "").split("&").forEach(function(p){ var kv = p.split("="); if(kv[0]) o[kv[0]] = decodeURIComponent(kv[1] || ""); }); return o; }
@@ -1125,8 +1163,32 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
             return '<tr><td>' + (r.tie ? "=" : "") + r.place + '</td><td style="white-space:normal">' + nm + '</td><td style="text-align:right">' + (r.val == null ? e(r.status || "DNF") : e(r.val)) + '</td><td>' + e(r.cls) + '</td></tr>'; }).join("") + '</table></div>' + (d.stages ? roDiscStages(m, d) : '') + '</div>'; }).join("") +
       ((m.unranked || []).length ? '<div class="card"><h3 style="margin:0 0 4px">Not ranked</h3><p class="small muted" style="margin:0 0 6px">Shown for the record only; not in the rankings or the year standings.</p><ul style="margin:0;padding-left:18px">' + m.unranked.map(function(u){ return '<li>' + e(u.name) + ' · ' + e(u.disc) + ': <b>' + e(u.val) + '</b> <span class="small muted">(' + e(u.detail) + ')</span></li>'; }).join("") + '</ul></div>' : '') +
       '<div class="card rosrc"><b>Source:</b> ' + e(src.title || "") + (src.by ? ', made by ' + e(src.by) : "") + '. ' + e(src.note || "") + '</div>';
-    roPackWire(m);
+    roPackWire(m); adminDelWire(m.id, m);
   }
+  /* ---------- admin: remove a published result from the archive (soft delete = the same withdrawal the publishing phone does) ----------
+     One batch: every linked verify/{token} (each sheet's vt + the results rt) → hidden:true, data:"" (printed QRs then say "withdrawn"),
+     data/main → data:"", archive/{id} → hidden:true. The list, search, season standings and attendance records all read only
+     hidden == false records / non-hidden verify docs, so they update by themselves. Nothing is destroyed beyond the cloud copy;
+     the weekly backup and the publishing phone still hold it, and re-publishing from that phone restores it. */
+  function delToks(m){ var t = {}; (m.sheets || []).forEach(function(s){ if(s.vt) t[s.vt] = 1; }); if(m.rt) t[m.rt] = 1; return Object.keys(t).filter(function(x){ return /^[A-Za-z0-9_-]{22,64}$/.test(x); }); }
+  function adminDelWire(id, m){ if(!(window.SS_ARCHIVE_FAKE ? window.SS_ARCHIVE_FAKE.admin : ME.admin)) return;
+    var nm = String((m.match && m.match.name) || "").trim(), c = document.createElement("div"); c.className = "card noprint admdel";
+    c.innerHTML = '<h3 style="margin:0 0 4px">Admin</h3><p class="small muted" style="margin:0 0 8px">Remove this match from the archive for everyone: it disappears from the list, the search, the season standings and attendance records, and its printed QR codes show it as withdrawn.</p><button type="button" class="btn danger" id="admDel">Delete from archive…</button>';
+    app.appendChild(c);
+    document.getElementById("admDel").onclick = async function(){ var b = this;
+      var v = await uiPrompt("Delete “" + nm + "” (" + ((m.match && m.match.date) || "") + ") from the archive?\nType DELETE or the match name to confirm.", "", { ok: "Delete", danger: true });
+      if(v == null) return; v = String(v).trim();
+      if(v !== "DELETE" && v.toLowerCase() !== nm.toLowerCase()){ await uiAlert("Not deleted (type DELETE or the match name exactly)."); return; }
+      b.disabled = true; b.textContent = "Deleting…";
+      try{ await archiveSoftDelete(id, m); LIST = null; delete MDATA[id]; await uiAlert("“" + nm + "” was removed from the archive."); go("#"); }
+      catch(er){ b.disabled = false; b.textContent = "Delete from archive…"; await uiAlert("Could not delete: " + (er && er.message || er)); } };
+  }
+  function archiveSoftDelete(id, m){ if(window.SS_ARCHIVE_FAKE){ (window.SS_ARCHIVE_FAKE.deleted = window.SS_ARCHIVE_FAKE.deleted || []).push(id); window.SS_ARCHIVE_FAKE.list = window.SS_ARCHIVE_FAKE.list.filter(function(x){ return x.id !== id; }); return Promise.resolve(); }
+    return sdk().then(function(){ var bt = F.writeBatch(db), at = new Date().toISOString();
+      delToks(m).forEach(function(t){ bt.update(F.doc(db, "verify", t), { hidden: true, data: "", at: at }); });
+      bt.update(F.doc(db, "archive", id, "data", "main"), { data: "" });
+      bt.update(F.doc(db, "archive", id), { hidden: true });
+      return bt.commit(); }); }
   function showMatch(id, q){
     app.innerHTML = '<div class="card">Loading…</div>';
     loadMatch(id).then(function(m){
@@ -1139,7 +1201,7 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
       document.getElementById("q").oninput = paint; paint();
       document.getElementById("shList").onclick = function(ev){ var b = ev.target.closest("[data-pdf]"); if(b) pdfSheets(m, m.sheets.filter(function(s){ return s.sh.id === b.dataset.pdf; }), b); };
       document.getElementById("allPdf").onclick = function(){ pdfSheets(m, m.sheets, this); };
-      packWire(m);
+      packWire(m); adminDelWire(id, m);
     }).catch(fail);
   }
   function showSheet(id, sid){
@@ -1168,7 +1230,7 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
   function pdfVec(make, name, btn){
     var old = btn && btn.textContent; if(btn){ btn.disabled = true; btn.textContent = "Making PDF\u2026"; }
     return pdfLib().then(make).then(function(pdf){ window.__lastPdf = { name: name, pages: pdf.getNumberOfPages() }; pdf.save(name); })
-    .catch(function(er){ alert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.textContent = old; } });
+    .catch(function(er){ uiAlert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.textContent = old; } });
   }
   function pdfSheets(m, list, btn){ return pdfVec(function(){ return vpSheets(m, list, "fonts/", "published " + String(m.publishedAt || "").slice(0, 10)); }, slug(m.match.name) + "-" + (list.length === 1 ? slug(list[0].sh.name) : "score-sheets") + ".pdf", btn); }
   function pdfResults(m, btn){ return pdfVec(function(){ return vpResults(m, "fonts/"); }, slug(m.match.name) + "-results.pdf", btn); }
@@ -1180,20 +1242,20 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
     var name = slug(m.match.name) + "-" + (m.match.date || "") + "-results-pack.pdf";
     return pdfLib().then(function(){ return vpPack(m, "fonts/"); }).then(function(pdf){
         window.__lastPdf = { name: name, pages: pdf.getNumberOfPages(), title: vpTitle(m) }; pdf.save(name); })
-    .catch(function(er){ alert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.innerHTML = old; } });
+    .catch(function(er){ uiAlert(er.message || er); }).then(function(){ if(btn){ btn.disabled = false; btn.innerHTML = old; } });
   }
   /* results-only (kind:"results") records: separate standalone generator ro-pack.js; full records keep pdfPack/vpPack above */
   function roRec(m){ return getList().then(function(list){ var x = list.filter(function(y){ return y.id === m.id; })[0] || {}; return { id: m.id, idx: { date: x.date || (m.match && m.match.date), shooters: x.shooters }, data: m }; }); }
   function roPackWire(m){ var b = document.getElementById("roPackPdf"); if(!b || !isRO(m) || !window.ROPACK) { if(b) b.parentNode.style.display = "none"; return; }
     b.onclick = function(){ var old = b.innerHTML; b.disabled = true; b.textContent = "Making results pack\u2026"; var name = slug(m.match.name) + "-" + (m.match.date || "") + "-results-pack.pdf";
       Promise.all([pdfLib().then(function(){ return vpLoadFonts("fonts/"); }), roRec(m)]).then(function(r){ var pdf = ROPACK.roPack(r[1], r[0]); window.__lastPdf = { name: name, pages: pdf.getNumberOfPages(), kind: "results" }; pdf.save(name); })
-      .catch(function(er){ alert(er.message || er); }).then(function(){ b.disabled = false; b.innerHTML = old; }); }; }
+      .catch(function(er){ uiAlert(er.message || er); }).then(function(){ b.disabled = false; b.innerHTML = old; }); }; }
   function genDate(){ var d = new Date(); return d.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][d.getMonth()] + " " + d.getFullYear(); }
   function standPdf(ms, ds, rows, bestN, btn){ var old = btn.textContent; btn.disabled = true; btn.textContent = "Making PDF\u2026"; var name = "spectre-" + YEAR + "-season-standings.pdf";
     var recs = ms.map(function(x, i){ return { id: x.id, idx: { date: x.date, shooters: x.shooters }, data: ds[i] }; }).filter(function(r){ return r.data; });
     var pr = rows.map(function(r){ var v = Object.keys(r.per).map(function(k){ return r.per[k].pct || 0; }); return { place: r.place, name: r.name, total: r.total, shoots: r.shoots, high: v.length ? Math.max.apply(null, v) : 0 }; });
     pdfLib().then(function(){ return vpLoadFonts("fonts/"); }).then(function(f){ var pdf = ROPACK.seasonPdf(recs, pr, f, genDate(), { year: YEAR, counting: bestN ? "Best " + bestN + " of 12" : "All shoots count" }); window.__lastPdf = { name: name, pages: pdf.getNumberOfPages() }; pdf.save(name); })
-    .catch(function(er){ alert(er.message || er); }).then(function(){ btn.disabled = false; btn.textContent = old; }); }
+    .catch(function(er){ uiAlert(er.message || er); }).then(function(){ btn.disabled = false; btn.textContent = old; }); }
   window.SSA = { pdfSheets: pdfSheets, pdfResults: pdfResults, pdfPack: pdfPack, get cur(){ return CUR; } };
   /* ---------- router ---------- */
   /* ---------- season standings (one year's published club shoots) ----------
@@ -1307,9 +1369,9 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
         /* the token is saved on the profile FIRST (the rules only accept a verify doc under the profile's token for that year) */
         return sdk().then(function(){ return tk.saved ? null : F.updateDoc(F.doc(db, "users", ME.user.uid), { attToks: toks }).then(function(){ ME.prof.attToks = toks; }); })
           .then(function(){ return F.setDoc(F.doc(db, "verify", t), { v: 2, kind: "attendance", uid: ME.user.uid, year: y, hidden: hidden, at: new Date().toISOString(), data: hidden ? "" : JSON.stringify(doc) }); })
-          .then(showAttendance, function(er){ alert("Could not save: " + (er && er.message || er)); }); }
-      document.getElementById("attPub").onclick = function(){ if(confirm("Publish a public verify page with your name and your " + y + " shoots?")) put(false); };
-      var u = document.getElementById("attUnpub"); if(u) u.onclick = function(){ if(confirm("Withdraw your published " + y + " record? Its QR will show it as withdrawn.")) put(true); };
+          .then(showAttendance, function(er){ uiAlert("Could not save: " + (er && er.message || er)); }); }
+      document.getElementById("attPub").onclick = async function(){ if(await uiConfirm("Publish a public verify page with your name and your " + y + " shoots?")) put(false); };
+      var u = document.getElementById("attUnpub"); if(u) u.onclick = async function(){ if(await uiConfirm("Withdraw your published " + y + " record? Its QR will show it as withdrawn.")) put(true); };
     }, fail); }
   function route(){ var h = hash(); window.scrollTo(0, 0);
     var rules = /^#rules/.test(location.hash); document.getElementById("navRules").className = rules ? "on" : ""; var nr = document.getElementById("navRes"); nr.className = rules ? "" : "on"; navY();

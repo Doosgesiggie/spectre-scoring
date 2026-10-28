@@ -77,6 +77,43 @@ var SS_FIREBASE_CONFIG = {
 var SS_FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.14.1/"; /* modular ESM, loaded only when live sync is switched on */
 /* ========================================================================== */
 
+/* In-app dialogs (archive / register / verify pages): promise-based replacements for alert / confirm / prompt.
+   Native dialogs are never used: after a few, mobile browsers offer "Prevent this page from creating additional dialogs",
+   and once ticked every later alert/confirm silently fails and buttons stop working until a reload. Works offline (no assets). */
+(function(){
+  var Q = Promise.resolve(), css = false;
+  function addCss(){ if(css) return; css = true; var s = document.createElement("style");
+    s.textContent = ".ssdlg-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px}" +
+      ".ssdlg{background:#fff;color:#111;border-radius:12px;max-width:440px;width:100%;padding:18px 18px 14px;box-shadow:0 10px 40px rgba(0,0,0,.4);font:16px/1.4 system-ui,Arial,sans-serif}" +
+      ".ssdlg p{margin:0 0 14px;white-space:pre-wrap}.ssdlg input{width:100%;box-sizing:border-box;font-size:16px;padding:9px;margin:0 0 14px;border:1px solid #888;border-radius:8px}" +
+      ".ssdlg .b{display:flex;gap:10px;justify-content:flex-end}.ssdlg button{font-size:16px;padding:10px 16px;border-radius:8px;border:1px solid #14284b;background:#fff;color:#14284b;min-height:44px}" +
+      ".ssdlg button.ok{background:#14284b;color:#fff}.ssdlg button.ok.danger{background:#b3261e;border-color:#b3261e}@media print{.ssdlg-bg{display:none}}";
+    document.head.appendChild(s); }
+  function show(kind, msg, o){ o = o || {};
+    var run = function(){ return new Promise(function(res){ addCss();
+      var prev = document.activeElement, bg = document.createElement("div"), id = "ssdlg" + Date.now();
+      bg.className = "ssdlg-bg"; bg.innerHTML = '<div class="ssdlg" role="' + (kind === "alert" ? "alertdialog" : "dialog") + '" aria-modal="true" aria-labelledby="' + id + '"><p id="' + id + '"></p>' +
+        (kind === "prompt" ? '<input type="text" aria-labelledby="' + id + '">' : "") + '<div class="b">' + (kind === "alert" ? "" : '<button type="button" class="no"></button>') + '<button type="button" class="ok"></button></div></div>';
+      bg.querySelector("p").textContent = String(msg == null ? "" : msg);
+      var ok = bg.querySelector(".ok"), no = bg.querySelector(".no"), inp = bg.querySelector("input");
+      ok.textContent = o.ok || "OK"; if(o.danger) ok.className += " danger"; if(no) no.textContent = o.cancel || "Cancel"; if(inp) inp.value = o.value || "";
+      function done(v){ document.removeEventListener("keydown", key, true); bg.remove(); try{ prev && prev.focus && prev.focus(); }catch(e){} res(v); }
+      function key(ev){ if(ev.key === "Escape"){ ev.preventDefault(); done(kind === "alert" ? undefined : kind === "prompt" ? null : false); }
+        else if(ev.key === "Enter" && (ev.target === inp || ev.target === ok)){ ev.preventDefault(); ok.click(); }
+        else if(ev.key === "Tab"){ var f = [inp, no, ok].filter(Boolean), i = f.indexOf(document.activeElement); ev.preventDefault(); f[(i + (ev.shiftKey ? f.length - 1 : 1)) % f.length].focus(); } }
+      ok.onclick = function(){ done(kind === "alert" ? undefined : kind === "prompt" ? inp.value : true); };
+      if(no) no.onclick = function(){ done(kind === "prompt" ? null : false); };
+      document.addEventListener("keydown", key, true); document.body.appendChild(bg); (inp || ok).focus(); }); };
+    var p = Q.then(run); Q = p.then(function(){}, function(){}); return p; }   /* one at a time, in call order */
+  window.uiAlert = function(m, o){ return show("alert", m, o); };
+  window.uiConfirm = function(m, o){ return show("confirm", m, o); };
+  window.uiPrompt = function(m, v, o){ o = o || {}; o.value = v; return show("prompt", m, o); };
+  /* safety net: anything (incl. bundled libraries) that still calls the natives gets the in-app dialog instead */
+  window.alert = function(m){ uiAlert(m); };
+  window.confirm = function(m){ console.warn("native confirm() blocked – use uiConfirm:", m); return false; };
+  window.prompt = function(m){ console.warn("native prompt() blocked – use uiPrompt:", m); return null; };
+})();
+
 /* ===== Spectre ghost logo (horizontal, viewBox 1750 x 600) as vector paths for jsPDF (integer-rounded, delta-packed: ~1 byte per coordinate; decoded once at load into the same absolute "M x y C …" strings), converted from /workspace/spectre-logo/*.svg (Gunny) =====
    vpLogo(doc, key, x, y, w): draws it as filled vector paths (no image), key "navybar" (white + gold, for the navy bar) or "onwhite" (navy + gold). */
 var VP_LOGO = (function(Z){ var A = "!#$%&()*+,-./0123456789:;<=>?@ABDEFGHIJKNOPQRSTUVWXY[]^_`abcdefghijklmnopqrstuvwxyz{|}", H = 42, o = {};
