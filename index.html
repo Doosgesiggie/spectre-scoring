@@ -294,7 +294,10 @@ var BUCK_RULE = "Buckshot: 1 round per target; the pellet holes score as 2 hits 
 var REQ_MODES = { best2: "Best 2", fixed: "Fixed N, all scored", moz: "Mozambique (2 body + 1 head)", custom: "Custom" };
 var SEMI_AUTO = ["MSR","ESR","MSC","ESC","MCC","SLR","ELR","SLC","ELC","LCC","SPC","EPC"];
 var SEMI_AUTO_TEXT = "Semi-Auto Rifle classes (Modern, Legacy, PCC)";
-var RANKINGS = { "class": "Same class only (p.17)", open: "Open ranking (all competitors)" };
+/* Class ranking removed for now (Oct 2026, MD request). To restore: add back  "class": "Same class only (p.17)"  here,
+   the stageRanking() default, the RANKING warning in b-logic.js, and the #bRank select in e-forms.js.
+   Originals: /workspace/backups/designer-src-preclass/ and /workspace/backups/vendor-preclass/ */
+var RANKINGS = { open: "Open ranking (all competitors)" };
 var NS_KIND = { noshoot: "no-shoot", hostage: "hostage" };
 var BARREL_STACK = { single: { n: "Single", h: 0.9, cover: "kneeling / low cover" }, double: { n: "Stacked double (two high)", h: 1.8, cover: "standing cover" } };
 var BARREL_DIA = 0.58;
@@ -548,7 +551,8 @@ function steelMin(fa){ return FIREARMS[fa].steelMin; }
 /* angle of an engagement line from the stage's downrange direction (dr: degrees clockwise from up the page), 0..180 */
 function angleFromDownrange(p, t, dr){ var dx = t.x - p.x, dy = t.y - p.y; if(!dx && !dy) return 0; var a = Math.atan2(dx, dy) * 180 / Math.PI - (+dr || 0); a = ((a % 360) + 540) % 360 - 180; return Math.abs(a); }
 function usedFirearmTypes(st){ var u = {}; st.engagements.forEach(function(e){ u[e.firearm] = 1; }); if(!st.engagements.length) st.firearms.forEach(function(f){ u[f] = 1; }); return Object.keys(u); }
-function stageRanking(st){ return st.ranking && st.ranking !== "auto" ? st.ranking : (usedFirearmTypes(st).length >= 2 ? "open" : "class"); }
+/* every stage is ranked open; an old saved "class" setting is ignored (normalizeStage resets it to "auto") */
+function stageRanking(st){ return "open"; }
 /* ---- hit requirements per target ---- */
 /* ---- shotgun on cardboard / paper: always exactly 1 round per target (slug 1 hit, buckshot 2 best pairs) ---- */
 function effAmmo(e, t){ if(e.firearm !== "shotgun") return ""; return AMMO[e.ammo] ? e.ammo : (t && isSteel(t) ? "bird" : "slug"); }
@@ -839,8 +843,7 @@ function runChecks(st, S){
   if(st.semiAuto && st.firearms.indexOf("rifle") >= 0) fg.pcc = "rifle";
   var extra = classes.filter(function(c){ return !fg[CLS[c].g]; });
   if(extra.length) add("warn", "CLASS_EXTRA", "Eligible classes " + extra.join(", ") + " do not match the stage firearms.", "Chapter 1, p.17");
-  var rk = stageRanking(st);
-  if(rk === "class" && usedFirearmTypes(st).length >= 2) add("warn", "RANKING", "Multi-gun stage ranked same class only: SWPC multi-gun stages use one open ranking for everyone.", "Club rule (confirmed by the MD); p.17");
+  /* RANKING warning (multi-gun stage ranked same class only) removed with class ranking */
   st.firearms.forEach(function(f){ if(!classes.some(function(c){ return FIREARMS[f].groups.indexOf(CLS[c].g) >= 0; })) add("warn", "CLASS_NONE", "No eligible class is selected for the " + FN(f).toLowerCase() + ".", "Chapter 1, p.17"); });
   st.firearms.forEach(function(f){ if(!rb[f] && st.engagements.length) add("warn", "FIREARM_UNUSED", FN(f) + " is ticked but has no engagements.", ""); });
 
@@ -1599,7 +1602,7 @@ function sigAll(keys){ var out = {}; return Promise.all(keys.map(function(k){ re
 /* Stage ranking: negative – lowest final time; positive – highest points, equal points: faster time ahead;
    Long-Range §4.3.3 – within par first, most hits, fewest shots, fastest time (no extra penalties). Equal = shared placing.
    Multi-gun match (any stage using 2+ firearm types, or stages for different firearms): open rankings only.
-   Single-firearm match: class rankings (p.17) plus the open ranking. */
+   Every match: one open ranking (class ranking removed). */
 function cmpStage(model){
   if(model === "negative") return function(a, b){ return a.res.total - b.res.total; };
   if(model === "positive") return function(a, b){ return (b.res.total - a.res.total) || ((a.res.time > 0 ? a.res.time : 1e9) - (b.res.time > 0 ? b.res.time : 1e9)); };
@@ -1624,12 +1627,13 @@ function scoreOf(stId, shId){ var sc = S.scores[skey(stId, shId)]; if(sc) return
   return { key: skey(stId, shId), stage: stId, shooter: shId, auto: true, src: dq.stage, time: null, targets: {}, ns: {}, pens: {}, cover: { imp: 0, good: 0 }, dnf: false, dq: true, dqReason: dq.dqReason || "", qs: { pts: null, pass: null }, signed: false, sig: false, device: "", deviceId: "", at: dq.at || null, rev: 0, history: [] }; }
 function isMatchDQ(shId){ return !!dqOf(shId); }
 function matchFirearms(){ var u = {}; liveStages().forEach(function(st){ usedFirearmTypes(st).forEach(function(f){ u[f] = 1; }); }); return FA_ORDER.filter(function(f){ return u[f]; }); }
-function isMultiGun(){ return liveStages().some(function(st){ return stageRanking(st) === "open"; }) || matchFirearms().length > 1; }
-function stageOpen(st){ return (isMultiGun() && !(rankByDiv() && stageFirearm(st))) || stageRanking(st) === "open"; }
+function isMultiGun(){ return matchFirearms().length > 1; }
+/* one plain open ranking everywhere (class ranking removed, Nov 2026) */
+function stageOpen(st){ return true; }
 function stageFirearm(st){ var u = usedFirearmTypes(st); return u.length === 1 ? u[0] : null; }
 function matchFirearm(){ var f = matchFirearms(); return f.length === 1 ? f[0] : null; }
 /* groups: open → "Open"; else by the shooter's division for that firearm (sh.divs) or their class. Shooters not entered in the firearm's discipline are left out. */
-function rankByDiv(){ return !!(S.match && S.match.rankByDiv); }
+function rankByDiv(){ return false; }
 function groupsFor(list, open, fa){ if(!rankByDiv()) fa = null; var g = {}; list.forEach(function(sh){ if(!enteredFor(sh, fa)) return; var k = open ? "Open" : divLabelFor(sh, fa); (g[k] = g[k] || []).push(sh); }); return g; }
 function groupOrder(keys){ return keys.sort(function(a, b){ var ia = CLASSES.findIndex(function(c){ return c.c === a; }), ib = CLASSES.findIndex(function(c){ return c.c === b; }); if(a === "Open") return -1; if(b === "Open") return 1; if(ia < 0) ia = 99; if(ib < 0) ib = 99; return ia - ib || a.localeCompare(b); }); }
 /* one stage: { open, model, groups: [{ name, rows: [{sh, sc, res, place, dqLater}], other: [{sh, sc, res, why}] }] }
@@ -1671,7 +1675,7 @@ function countedStages(fa){
 function firearmOveralls(){ if(!isMultiGun()) return []; return matchFirearms().filter(function(f){ return countedStages(f).length > 0; }); }
 function matchResults(open, fa){
   var method = matchMethod(), stages = method === "mixed" ? [] : countedStages(fa), multi = isMultiGun();
-  if(multi && (!fa || !rankByDiv())) open = true;
+  open = true;
   var g = groupsFor(S.shooters, open, fa || matchFirearm()), out = { method: method, open: open, fa: fa || null, stages: stages, groups: [] };
   groupOrder(Object.keys(g)).forEach(function(name){
     var rows = [], other = [];
@@ -1705,14 +1709,11 @@ function hasOpenStage(){ return isMultiGun(); }
 /* the overall result views for the current match */
 function overallViews(){
   var v = [];
-  if(isMultiGun()){
-    v.push({ id: "open", label: "Overall (all stages)", open: true, fa: null });
-    firearmOveralls().forEach(function(f){ v.push({ id: "fa:" + f, label: FN(f) + " overall", open: true, fa: f });
-      if(rankByDiv()) v.push({ id: "fd:" + f, label: FN(f) + " by division", open: false, fa: f }); });
-  } else { v.push({ id: "overall", label: "Overall by class", open: false, fa: null }); v.push({ id: "open", label: "Open ranking", open: true, fa: null }); }
+  v.push({ id: "open", label: isMultiGun() ? "Overall (all stages)" : "Overall", open: true, fa: null });
+  if(isMultiGun()) firearmOveralls().forEach(function(f){ v.push({ id: "fa:" + f, label: FN(f) + " overall", open: true, fa: f }); });
   return v;
 }
-function viewTitle(v){ if(v.fa && !v.open) return FN(v.fa) + " – " + FN(v.fa).toLowerCase() + "-only stages, ranked by each shooter's " + DISC_N[discOf(v.fa)].toLowerCase() + " division"; return v.fa ? FN(v.fa) + " overall – " + FN(v.fa).toLowerCase() + "-only stages (open ranking)" : v.open ? "Overall – open ranking (all competitors)" + (isMultiGun() ? ", multi-gun match" : "") : "Overall – by class"; }
+function viewTitle(v){ return v.fa ? FN(v.fa) + " overall – " + FN(v.fa).toLowerCase() + "-only stages (open ranking)" : "Overall – open ranking (all competitors)"; }
 
 /* hit-count cell: "–" for DNF / DQ (no counts), else the number */
 function cnt(x, k){ return !x || x.noCounts || x[k] == null ? "–" : x[k]; }
@@ -1720,25 +1721,25 @@ function cnt(x, k){ return !x || x.noCounts || x[k] == null ? "–" : x[k]; }
 function csvCell(v){ v = v == null ? "" : String(v); return /[",;\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 function csvRows(rows){ return rows.map(function(r){ return r.map(csvCell).join(","); }).join("\r\n") + "\r\n"; }
 function resultsCSV(){
-  var rows = [["Spectre Scoring – " + S.match.name + " – " + S.match.date + " – " + S.match.venue], ["Match Director: " + S.match.md, "Scoring model: " + (matchModel() || "–"), isMultiGun() ? "Multi-gun match: open rankings only" : "Single-firearm match: class and open rankings"], []];
+  var rows = [["Spectre Scoring – " + S.match.name + " – " + S.match.date + " – " + S.match.venue], ["Match Director: " + S.match.md, "Scoring model: " + (matchModel() || "–"), "Open ranking (all competitors)"], []];
   overallViews().forEach(function(v){
     var mr = matchResults(v.open, v.fa);
     rows.push([viewTitle(v).toUpperCase(), "Method: " + METHOD_TEXT[mr.method], "Stages: " + mr.stages.map(function(s){ return s.no; }).join(" ")]);
-    rows.push(["Group", "Rank", "Shooter", "Member", "Class", "Category"].concat(mr.stages.map(function(s){ return "Stage " + s.no; })).concat(["Total", "HZ hits", "Status"]));
+    rows.push(["Rank", "Shooter", "Member", "Class", "Category"].concat(mr.stages.map(function(s){ return "Stage " + s.no; })).concat(["Total", "HZ hits", "Status"]));
     mr.groups.forEach(function(g){
-      g.rows.forEach(function(r){ rows.push([g.name, r.place, shName(r.sh), r.sh.member, divsText(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat([totalText(mr.method, r), r.hz, r.tieHz ? "tie on total – placed by HZ hits" : ""])); });
-      g.other.forEach(function(r){ rows.push([g.name, "", shName(r.sh), r.sh.member, divsText(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat(["", "", r.why])); });
+      g.rows.forEach(function(r){ rows.push([r.place, shName(r.sh), r.sh.member, divsText(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat([totalText(mr.method, r), r.hz, r.tieHz ? "tie on total – placed by HZ hits" : ""])); });
+      g.other.forEach(function(r){ rows.push(["", shName(r.sh), r.sh.member, divsText(r.sh), r.sh.cat].concat(r.cells.map(function(c){ return c.txt; })).concat(["", "", r.why])); });
     });
     rows.push([]);
   });
   S.stages.forEach(function(st){
     var sr = stageResults(st);
     if(sr.cancelled){ rows.push(["STAGE " + st.no + " – " + st.title, "CANCELLED – not counted"]); rows.push([]); return; }
-    rows.push(["STAGE " + st.no + " – " + st.title, st.division + " · " + MODELS[st.scoring].n + " model · " + (sr.open ? "open ranking" : "by class") + " · " + stageTotal(st).rounds + " rounds"]);
-    rows.push(["Group", "Rank", "Shooter", "Class", "Time (s)", "HZ", "PZI", "PZII", "Misses", "Steel standing", "Not engaged", "No-shoot hits", "Penalties", "Cover (imp/good)", "Hits (LR)", "Shots (LR)", "Stage score", "Status", "Signed", "Scored by", "Scored at", "Scored on (phone)", "Edits"]);
+    rows.push(["STAGE " + st.no + " – " + st.title, st.division + " · " + MODELS[st.scoring].n + " model · " + "open ranking" + " · " + stageTotal(st).rounds + " rounds"]);
+    rows.push(["Rank", "Shooter", "Class", "Time (s)", "HZ", "PZI", "PZII", "Misses", "Steel standing", "Not engaged", "No-shoot hits", "Penalties", "Cover (imp/good)", "Hits (LR)", "Shots (LR)", "Stage score", "Status", "Signed", "Scored by", "Scored at", "Scored on (phone)", "Edits"]);
     sr.groups.forEach(function(g){
       g.rows.concat(g.other).forEach(function(r){ var x = r.res;
-        rows.push([g.name, r.place || "", shName(r.sh), divsText(r.sh), r.sc.time != null ? f2(r.sc.time) : "", cnt(x, "hz"), cnt(x, "pz1"), cnt(x, "pz2"), cnt(x, "miss"), cnt(x, "standing"), cnt(x, "fte"), cnt(x, "ns"), cnt(x, "pen"), x.noCounts ? "–" : (x.coverImp || 0) + "/" + (x.coverGood || 0), x.hits != null ? x.hits : "", x.shots != null ? x.shots : "", scoreText(st, x), r.why || (r.dqLater ? "DQ later in the match" : ""), r.sc.signed ? "yes" : "no", scoredByOf(r.sc).name, r.sc.at ? fmtWhen(r.sc.at) : "", r.sc.device || "", (r.sc.history || []).length]); });
+        rows.push([r.place || "", shName(r.sh), divsText(r.sh), r.sc.time != null ? f2(r.sc.time) : "", cnt(x, "hz"), cnt(x, "pz1"), cnt(x, "pz2"), cnt(x, "miss"), cnt(x, "standing"), cnt(x, "fte"), cnt(x, "ns"), cnt(x, "pen"), x.noCounts ? "–" : (x.coverImp || 0) + "/" + (x.coverGood || 0), x.hits != null ? x.hits : "", x.shots != null ? x.shots : "", scoreText(st, x), r.why || (r.dqLater ? "DQ later in the match" : ""), r.sc.signed ? "yes" : "no", scoredByOf(r.sc).name, r.sc.at ? fmtWhen(r.sc.at) : "", r.sc.device || "", (r.sc.history || []).length]); });
     });
     rows.push([]);
   });
@@ -1752,16 +1753,16 @@ function resultsSnapshot(){
   overallViews().forEach(function(v){
     var mr = matchResults(v.open, v.fa), rows = [];
     mr.groups.forEach(function(g){
-      g.rows.forEach(function(r){ rows.push([g.name, String(r.place), shName(r.sh), divsText(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat([totalText(mr.method, r), r.tieHz ? "tie – placed by HZ" : ""])); });
-      g.other.forEach(function(r){ rows.push([g.name, "", shName(r.sh), divsText(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat(["", String(r.why || "")])); });
+      g.rows.forEach(function(r){ rows.push([String(r.place), shName(r.sh), divsText(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat([totalText(mr.method, r), r.tieHz ? "tie – placed by HZ" : ""])); });
+      g.other.forEach(function(r){ rows.push(["", shName(r.sh), divsText(r.sh)].concat(r.cells.map(function(c){ return String(c.txt == null ? "" : c.txt); })).concat(["", String(r.why || "")])); });
     });
-    tables.push({ t: v.label, s: viewTitle(v) + " · " + METHOD_TEXT[mr.method], h: ["Group", "#", "Shooter", "Class"].concat(mr.stages.map(function(s){ return "S" + s.no; })).concat(["Total", ""]), r: rows });
+    tables.push({ t: v.label, s: viewTitle(v) + " · " + METHOD_TEXT[mr.method], h: ["#", "Shooter", "Class"].concat(mr.stages.map(function(s){ return "S" + s.no; })).concat(["Total", ""]), r: rows });
   });
   S.stages.forEach(function(st){
     var sr = stageResults(st), rows = [];
     if(sr.cancelled){ tables.push({ t: "Stage " + st.no + " (cancelled)", s: "Stage " + st.no + " – " + st.title + " · cancelled, not counted in the match", h: ["Stage " + st.no], r: [["Cancelled – not counted"]] }); return; }
-    sr.groups.forEach(function(g){ g.rows.concat(g.other).forEach(function(r){ rows.push([g.name, String(r.place || ""), shName(r.sh), divsText(r.sh), r.sc.time != null ? f2(r.sc.time) : "", scoreText(st, r.res), String(r.why || (r.dqLater ? "DQ later in the match" : ""))]); }); });
-    tables.push({ t: "Stage " + st.no, s: "Stage " + st.no + " – " + st.title + " · " + (sr.open ? "open ranking" : "by class"), h: ["Group", "#", "Shooter", "Class", "Time (s)", "Score", ""], r: rows });
+    sr.groups.forEach(function(g){ g.rows.concat(g.other).forEach(function(r){ rows.push([String(r.place || ""), shName(r.sh), divsText(r.sh), r.sc.time != null ? f2(r.sc.time) : "", scoreText(st, r.res), String(r.why || (r.dqLater ? "DQ later in the match" : ""))]); }); });
+    tables.push({ t: "Stage " + st.no, s: "Stage " + st.no + " – " + st.title + " · " + "open ranking", h: ["#", "Shooter", "Class", "Time (s)", "Score", ""], r: rows });
   });
   return { match: { name: S.match.name, date: S.match.date, venue: S.match.venue, note: matchNote() }, notes: notesPlain(), tables: tables };
 }
@@ -1939,7 +1940,7 @@ function render(){
 function thumb(st, w, h){ try{ return diagramSVG(st, w || 110, h || 80, {}); }catch(e){ return ""; } }
 function stageChips(st){
   var m = stageModel(st), tot = stageTotal(st);
-  return '<span class="chip">' + esc(st.division) + '</span><span class="chip">' + esc(MODELS[st.scoring].n) + '</span>' + (stageRanking(st) === "open" ? '<span class="chip warn">Open ranking</span>' : "") +
+  return '<span class="chip">' + esc(st.division) + '</span><span class="chip">' + esc(MODELS[st.scoring].n) + '</span>' +
     '<span class="chip">' + tot.rounds + (tot.fixed ? "" : "+") + ' rds</span>' + (st.limited ? '<span class="chip">Limited</span>' : '<span class="chip">Unlimited</span>') + (st.parTime ? '<span class="chip">Par ' + st.parTime + ' s</span>' : "") +
     '<span class="chip">' + st.firearms.map(FN).join(" + ") + '</span>';
 }
@@ -2120,7 +2121,7 @@ function renderResults(){
   var v = views.filter(function(x){ return x.id === U.res; })[0];
   if(v){
     var mr = matchResults(v.open, v.fa);
-    h += '<div class="small muted" style="margin-bottom:6px"><b>' + esc(viewTitle(v)) + '</b><br>' + esc(METHOD_TEXT[mr.method]) + (mr.stages.length ? ' · stages ' + mr.stages.map(function(s){ return s.no; }).join(", ") : "") + (v.open ? "" : " · each class ranked separately (p.17)") + lrNote(mr) + '</div>';
+    h += '<div class="small muted" style="margin-bottom:6px"><b>' + esc(viewTitle(v)) + '</b><br>' + esc(METHOD_TEXT[mr.method]) + (mr.stages.length ? ' · stages ' + mr.stages.map(function(s){ return s.no; }).join(", ") : "") + lrNote(mr) + '</div>';
     if(!mr.groups.length) h += '<div class="msg info">No scores yet.</div>';
     mr.groups.forEach(function(g){ h += overallTable(mr, g); });
   } else {
@@ -2239,7 +2240,6 @@ function renderMatch(){
     var n = Object.keys(S.scores).length;
     h += '<div class="card"><h3>Send scores to the main phone</h3><p class="small">' + n + ' score(s) on this phone. Send the whole set every time – the main phone skips the ones it already has.</p><div class="grid2"><button type="button" class="primary" data-act="scorespack"' + (n ? "" : " disabled") + '>Share file</button><button type="button" data-act="scoresqr"' + (n ? "" : " disabled") + '>Show QR</button></div></div>';
   }
-  if(!ro) h += '<div class="card"><h3>Rankings</h3><label class="agree' + (S.match.rankByDiv ? " on" : "") + '"><input type="checkbox" id="mRankDiv"' + (S.match.rankByDiv ? " checked" : "") + '> Rank separately by discipline and division</label><p class="small muted">Off (default): one combined ranking, as before. On: each discipline’s stages are ranked by every shooter’s division for that discipline (handgun / shotgun / rifle) and the Results tab gets “by division” tables. Published results follow this setting.</p></div>';
   h += syncCard();
   if(!ro) h += rolesCard() + archiveCard();
   h += regCard();
@@ -2255,7 +2255,6 @@ function renderMatch(){
   bind("mName", function(){ S.match.name = this.value; saveState(); }); bind("mDate", function(){ S.match.date = this.value; saveState(); });
   bind("mMd", function(){ S.match.md = this.value; saveState(); }); bind("mVenue", function(){ S.match.venue = this.value; saveState(); });
   bind("mScorer", function(){ S.match.scorer = this.value.trim(); saveState(); }); bind("mVenueTag", function(){ S.match.venueTag = this.value.trim(); saveState(); });
-  bind("mRankDiv", function(){ S.match.rankByDiv = this.checked; saveState(); if(typeof squadsRepublish === "function") squadsRepublish(); render(); });
   bind("devName", function(){ S.device.name = this.value.trim(); saveState(); render(); });
   syncBind(); regBind(); rolesBind(); archiveBind(); notesBind();
   bind("pDark", function(){ PREFS.dark = this.checked; savePrefs(); render(); }); bind("pBig", function(){ PREFS.big = this.checked; savePrefs(); render(); }); bind("pNext", function(){ PREFS.autoNext = this.checked; savePrefs(); render(); });
@@ -3050,15 +3049,15 @@ function roQRDialog(id){ var r = roById(id), code = roCode(id); if(!r || !code) 
 /* which shooters: "all" | "sq:<squad>" | "sh:<id>" – in squad order */
 function sheetStagePlace(sr, shId){
   for(var i = 0; i < sr.groups.length; i++){ var g = sr.groups[i];
-    var r = g.rows.filter(function(x){ return x.sh.id === shId; })[0]; if(r) return r.place + (sr.open ? "" : " (" + g.name + ")");
+    var r = g.rows.filter(function(x){ return x.sh.id === shId; })[0]; if(r) return String(r.place);
     var o = g.other.filter(function(x){ return x.sh.id === shId; })[0]; if(o) return o.why.split(":")[0]; }
   return "";
 }
-/* overall: the first overall view (Overall – all stages / by class) */
+/* overall: the first overall view (open ranking) */
 function sheetOverall(shId){
   var v = overallViews()[0]; if(!v) return null; var mr = matchResults(v.open, v.fa);
   for(var i = 0; i < mr.groups.length; i++){ var g = mr.groups[i];
-    var r = g.rows.filter(function(x){ return x.sh.id === shId; })[0]; if(r) return { total: totalText(mr.method, r), place: r.place + (mr.open ? "" : " (" + g.name + ")"), of: g.rows.length, label: v.label };
+    var r = g.rows.filter(function(x){ return x.sh.id === shId; })[0]; if(r) return { total: totalText(mr.method, r), place: String(r.place), of: g.rows.length, label: v.label };
     var o = g.other.filter(function(x){ return x.sh.id === shId; })[0]; if(o) return { total: "–", place: "Not ranked – " + o.why, of: g.rows.length, label: v.label }; }
   return { total: "–", place: "–", label: v.label };
 }

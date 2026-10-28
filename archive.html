@@ -252,6 +252,33 @@ function sheetByText(r){ return r && r.by ? "Scored by " + r.by + (r.at ? " · "
 function sheetCov(r){ if(!r || typeof r.hz !== "number") return 0; if(typeof r.cvi === "number" || typeof r.cvg === "number") return (r.cvi || 0) + (r.cvg || 0) * 2;
   var pt = parseFloat(r.penT), b = (r.miss || 0) * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7; return isFinite(pt) && b - pt > 0.005 ? Math.round((b - pt) * 100) / 100 : 0; }
 function sheetNum(x){ var n = parseFloat(String(x == null ? "" : x).replace(/[^\d.\-]/g, "")); return isNaN(n) ? null : n; }
+/* older archive records (before Nov 2026) were ranked by class: "Overall by class" / "Group" columns / places like "1 (SSP)".
+   Class ranking is gone, so rebuild ONE open ranking from the published numbers: overall from the "Open ranking" table, else by total;
+   stages by stage score; lowest wins on time matches (highest on points); ties share a place; DNF / DQ stay unranked. Idempotent. */
+function spOpenify(m){
+  if(!m || m.openified || !(m.tables || []).some(function(t){ return (t.h || [])[0] === "Group"; })) return m;
+  var neg = m.neg !== false, n = function(v){ var x = parseFloat(String(v == null ? "" : v).replace(/[^\d.\-]/g, "")); return isNaN(x) ? null : x; };
+  var rank = function(rows, pi, vi){ var sc = rows.filter(function(r){ return /^\d+/.test(String(r[pi])) && n(r[vi]) != null; }).sort(function(a, b){ return neg ? n(a[vi]) - n(b[vi]) : n(b[vi]) - n(a[vi]); }), rest = rows.filter(function(r){ return sc.indexOf(r) < 0; });
+    sc.forEach(function(r, i){ r[pi] = String(i && n(sc[i - 1][vi]) === n(r[vi]) ? sc[i - 1][pi] : i + 1); }); rest.forEach(function(r){ r[pi] = ""; }); return sc.concat(rest); };
+  var tabs = [], ovT = null, stT = {};
+  (m.tables || []).forEach(function(t){ var h = t.h || [];
+    if(/by class/i.test(t.t || "")) return;
+    if(h[0] !== "Group"){ tabs.push(t); return; }
+    var x = { t: /^open ranking$/i.test(t.t) ? "Overall" : t.t, s: String(t.s || "").replace(/ · by class/, " · open ranking"), h: h.slice(1), r: (t.r || []).map(function(r){ return r.slice(1); }) };
+    var st = /^Stage (\d+)$/.exec(x.t); x.r = rank(x.r, 0, x.h.indexOf(st ? "Score" : "Total")); if(st) stT[st[1]] = x; else if(x.t === "Overall") ovT = x; tabs.push(x); });
+  if(!ovT){ /* no open table published: rank the sheets by their totals */
+    var sh = (m.sheets || []).filter(function(s){ return s.ov && /^\d+/.test(String(s.ov.place)) && n(s.ov.total) != null; });
+    ovT = { t: "Overall", s: "Overall – open ranking (all competitors)", h: ["#", "Shooter", "Total"], r: rank(sh.map(function(s){ return ["1", s.sh.name, s.ov.total]; }), 0, 2) }; tabs.unshift(ovT); }
+  var plOf = function(t, name){ var ni = t.h.indexOf("Shooter"), r = t.r.filter(function(r){ return r[ni] === name; })[0]; return r && r[0] ? r[0] : null; };
+  var nOv = ovT.r.filter(function(r){ return r[0]; }).length;
+  (m.sheets || []).forEach(function(s){ var nm = s.sh && s.sh.name;
+    if(s.ov && /^\d+/.test(String(s.ov.place))){ var p = plOf(ovT, nm); s.ov.place = p || "-"; s.ov.of = nOv; s.ov.label = "Overall – open ranking"; }
+    else if(s.ov) s.ov.label = "Overall – open ranking";
+    (s.rows || []).forEach(function(r){ if(/^\d+/.test(String(r.place)) && stT[r.no]){ r.place = plOf(stT[r.no], nm) || r.place.replace(/\s*\(.*\)$/, ""); } }); });
+  m.tables = tabs; m.openified = true; return m;
+}
+/* a single published sheet with an old class place ("2 (SSP)") cannot be re-ranked on its own (verify page): show it as not shown */
+function sheetPlace(p){ return /^\d+\s*\(.+\)$/.test(String(p == null ? "" : p)) ? "–" : p; }
 function sheetRender(d, sigs, printed){
   var e = shEsc, m = d.match || {}, sh = d.sh || {}, v = function(x){ return x == null || x === "" ? "" : e(x); };
   var sigOf = function(r){ return r && r.sigKey && sigs ? sigs[r.sigKey] : null; }, anySig = (d.rows || []).some(function(r){ return !!sigOf(r); });
@@ -271,15 +298,16 @@ function sheetRender(d, sigs, printed){
       if(!cvr) return '<td class="n">' + v(r.penT) + '</td>'; var c = sheetCov(r), sc = sheetNum(r.score), t = sheetNum(r.time), p = sc != null && t != null ? Math.round((sc - t + c) * 100) / 100 : null;
       if(c && p != null) cvl.push("Stage " + r.no + ": " + t.toFixed(2) + " + " + p.toFixed(2) + " − " + c + " cover bonus = " + sc.toFixed(2) + " s");
       return '<td class="n">' + (p != null ? p.toFixed(2) : v(r.penT)) + '</td><td class="n">' + (c ? "−" + c : "") + '</td>'; })() +
-      '<td class="n"><b>' + v(r.score) + '</b>' + fnOf(r) + '</td><td class="n">' + v(r.place) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
+      '<td class="n"><b>' + v(r.score) + '</b>' + fnOf(r) + '</td><td class="n">' + v(sheetPlace(r.place)) + '</td>' + (anySig ? '<td class="c">' + (sg ? '<img class="esig" src="' + e(sg) + '" alt="signed">' : "") + '</td>' : "") + '</tr>';
     if(r.by) h += '<tr class="shby"><td></td><td colspan="' + (cols - 1) + '">' + e(sheetByText(r)) + (r.dev ? ' <span class="muted">(' + e(r.dev) + ')</span>' : "") + '</td></tr>';
   });
   h += '</table>';
   if(cvr) h += '<div class="shnote">Stage score = raw time + penalty time (PZI ×1, PZII ×3, misses ×7, procedurals ×3, no-shoots ×7) − cover bonus (§4.2.3: imperfect cover 1 s, good cover 2 s). ' + e(cvl.join(" · ")) + '</div>';
   var ov = d.ov;
-  if(ov) h += '<table class="shtot"><tr><th>Match total</th><td><b>' + e(ov.total) + '</b></td><th>Overall place</th><td><b>' + e(ov.place) + '</b>' + (ov.of && /^\d/.test(ov.place) ? ' of ' + e(ov.of) : "") + '</td></tr></table>';
+  if(ov) h += '<table class="shtot"><tr><th>Match total</th><td><b>' + e(ov.total) + '</b></td><th>Overall place</th><td><b>' + e(sheetPlace(ov.place)) + '</b>' + (ov.of && /^\d/.test(sheetPlace(ov.place)) ? ' of ' + e(ov.of) : "") + '</td></tr></table>';
   if(fns.length) h += '<ol class="shfn">' + fns.map(function(f){ return '<li>Stage ' + e(f.no) + ': ' + e(f.text) + '</li>'; }).join("") + '</ol>';
   if(m.note) h += '<div class="shmnote"><b>Match note:</b> ' + e(m.note) + '</div>';
+  if((d.rows || []).concat(ov ? [ov] : []).some(function(r){ return sheetPlace(r.place) !== r.place; })) h += '<div class="shnote">Places on this older record were by class; class ranking is no longer used, so see the published match results for the open ranking.</div>';
   h += '<div class="shnote">' + (ov ? e(ov.label) + ' · ' : "") + e(d.method || "") + '. Every score is stamped digitally on the scoring phone with the Range Officer’s name and the time' + (anySig ? '; e-sig. = the shooter’s signature captured on the scoring phone' : "") + '.</div>';
   h += '<div class="shfoot">Spectre Scoring ' + e(d.ver || "") + (printed ? ' · ' + e(printed) : "") + (d.vt && typeof spVerifyBlock === "function" ? spVerifyBlock(d.vt) : "") + '</div></div>';
   return h;
@@ -342,6 +370,7 @@ var VP_MARKS = ["*", "**", "\u2020", "\u2021", "\u2020\u2020", "\u2021\u2021"];
 function vpCov(r){ var isN = function(v){ return typeof v === "number" && isFinite(v); }; if(!r || !isN(r.hz)) return 0; if(isN(r.cvi) || isN(r.cvg)) return (r.cvi || 0) + (r.cvg || 0) * 2;
   var pt = parseFloat(r.penT), base = (r.miss || 0) * 7 + (r.pen || 0) * 3 + (r.ns || 0) * 7; return isFinite(pt) && base - pt > 0.005 ? Math.round((base - pt) * 100) / 100 : 0; }
 function vpModel(m){
+  if(typeof spOpenify === "function") m = spOpenify(JSON.parse(JSON.stringify(m))); /* old class-ranked records → one open ranking */
   var mt = m.match || {}, sheets = m.sheets || [], isN = function(v){ return typeof v === "number"; };
   var stMap = {};
   sheets.forEach(function(s){ (s.rows || []).forEach(function(r){ if(!stMap[r.no]) stMap[r.no] = { no: r.no, title: r.title }; }); });
@@ -1003,8 +1032,8 @@ function seasonPdf(ms, rows, fonts, gen, o){ o=o||{}; var Y=o.year||String(ms[0]
 
 /* ---------- participation summary: one page per shooter ---------- */
 function placing(m, key){ var d=m.data, out=[];
-  if(d.kind!=="results"){ var s=d.sheets.filter(function(x){return nkey(x.sh.name)===key;})[0]; if(!s) return null; var p=/^\d+/.test(String(s.ov.place)), pn=parseInt(s.ov.place,10), cls=(/\(([^)]+)\)/.exec(String(s.ov.place))||[])[1];
-    return [{disc:"Overall (all stages)",res:p?String(s.ov.total):"-",pl:p?ordn(pn)+(cls?" "+cls:"")+" of "+s.ov.of:String(s.ov.place||"Not ranked")}]; }
+  if(d.kind!=="results"){ var s=d.sheets.filter(function(x){return nkey(x.sh.name)===key;})[0]; if(!s) return null; var p=/^\d+/.test(String(s.ov.place)), pn=parseInt(s.ov.place,10);
+    return [{disc:"Overall (all stages)",res:p?String(s.ov.total):"-",pl:p?ordn(pn)+" of "+s.ov.of:String(s.ov.place||"Not ranked")}]; }
   if(d.stageRes){ var rr=d.stageRes.rows, r=rr.filter(function(x){return nkey(x.name)===key;})[0]; if(!r) return null; var ok=rr.filter(function(x){return !x.status;}).sort(function(a,b){return a.total-b.total;});
     return [{disc:"Overall (combined)",res:r.status?"-":f2(r.total)+" s",pl:r.status?r.status:ordn(ok.indexOf(r)+1)+" of "+ok.length}]; }
   d.disciplines.forEach(function(x){ var r=x.rows.filter(function(y){return nkey(y.name)===key;})[0]; if(!r) return; var P=places(x);
@@ -1160,7 +1189,7 @@ window.ROPACK={roPack:roPack,seasonPdf:seasonPdf,partPdf:partPdf,standings:stand
   /* ---------- results pack text: admin-written on the archive record (archive/{id}.packText, a JSON string), over the text published with the match ----------
      packText = { stages: { "<stage no>": { desc, rounds } }, check: { method, corrNote, low, queries } } (raw text, one point per line). Blank = keep the published text. */
   function pkLines(t){ return String(t || "").split(/\r?\n/).map(function(x){ return x.trim(); }).filter(Boolean); }
-  function packApply(x, idx){ x.pub = x.pub || { stages: (x.stages || []).map(function(s){ return { desc: s.desc || "", roundsNote: s.roundsNote || "" }; }), check: x.match && x.match.check ? JSON.parse(JSON.stringify(x.match.check)) : null };
+  function packApply(x, idx){ spOpenify(x); x.pub = x.pub || { stages: (x.stages || []).map(function(s){ return { desc: s.desc || "", roundsNote: s.roundsNote || "" }; }), check: x.match && x.match.check ? JSON.parse(JSON.stringify(x.match.check)) : null };
     var o = null; try{ o = idx && idx.packText ? JSON.parse(idx.packText) : null; }catch(er){ o = null; }
     x.packText = o; x.packTextBy = idx && idx.packTextBy || ""; x.packTextAt = idx && idx.packTextAt || "";
     (x.stages || []).forEach(function(s, i){ var p = x.pub.stages[i], q = o && o.stages && o.stages[String(s.no)] || {};
