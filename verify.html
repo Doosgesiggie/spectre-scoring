@@ -154,10 +154,11 @@ function spLogoCorner(title){
 /* ===================== "Scan to verify" QR on score sheets =====================
    A published sheet carries vt = a random 128-bit base64url token; verify/{vt} in Firestore holds a public, read-only copy of that one
    sheet, shown by verify.html#t=TOKEN. The QR is built offline (vendor/qrcode.min.js, Kazuhiko Arase, MIT) and drawn as vector. */
-var SS_VERIFY_HOME = "https://doosgesiggie.github.io/spectre-scoring/verify.html";
+/* fallback only (file://, offline print); on a web origin the QR base is derived at runtime from location, so a domain move needs no code change */
+var SS_VERIFY_HOME = "https://spectretactical.github.io/spectre-scoring/verify.html";
 function spNewToken(){ var b = new Uint8Array(16); crypto.getRandomValues(b); var s = ""; for(var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function spTokOk(t){ return typeof t === "string" && /^[A-Za-z0-9_-]{22,64}$/.test(t); }
-function spVerifyURL(t){ var b = SS_VERIFY_HOME; try{ if(/^https?:$/.test(location.protocol) && !/\/verify\.html$/.test(location.pathname)) b = new URL("verify.html", location.href).href.split("#")[0].split("?")[0]; }catch(e){} return b + "#t=" + t; }
+function spVerifyURL(t){ var b = SS_VERIFY_HOME; try{ if(/^https?:$/.test(location.protocol)) b = location.origin + location.pathname.replace(/[^\/]*$/, "") + "verify.html"; }catch(e){} return b + "#t=" + t; }
 /* QR modules (true = dark) for text, or null without the library */
 function spQRMods(text){ if(typeof qrcode !== "function") return null; var q = qrcode(0, "M"); q.addData(text, "Byte"); q.make(); var n = q.getModuleCount(), m = [];
   for(var r = 0; r < n; r++){ var row = []; for(var c = 0; c < n; c++) row.push(q.isDark(r, c)); m.push(row); } return m; }
